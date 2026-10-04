@@ -1,6 +1,6 @@
 # AI Usage Monitor
 
-**Version 2.0.1**
+**Version 2.0.2**
 
 A small native desktop app for **Windows and Linux** that shows how much of your AI subscription you have used, at a glance. It supports **Claude** (Claude Code), **OpenAI** (ChatGPT plan used through the Codex CLI), **GitHub Copilot**, **Cursor** and **MiniMax** (Coding Plan), and is built so more providers can be added with one source file each.
 
