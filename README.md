@@ -22,7 +22,7 @@ Bars turn amber at 60 % and red at 85 %. Click a reset time to switch between a 
 
 The monitor finds providers automatically by looking for the credentials their CLIs already store. It only **reads** those files; it never writes to them and never stores its own copy.
 
-- **Claude** — reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls Anthropic's usage endpoint (`api.anthropic.com/api/oauth/usage`) every 60 s. The session block is computed from the newest Claude Code log under `~/.claude/projects/`. Only token counts, model and effort are read; conversation content is ignored.
+- **Claude** — reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls Anthropic's usage endpoint (`api.anthropic.com/api/oauth/usage`) every 120 s (`[claude] poll_seconds`, at least 60). Claude Code uses the same endpoint with the same token, so polling too often gets it rate-limited. The last reading is kept in the cache folder (`~/.cache/ai-usage-monitor`, Windows `%LOCALAPPDATA%\ai-usage-monitor`) so a restart shows it at once. The session block is computed from the newest Claude Code log under `~/.claude/projects/`. Only token counts, model and effort are read; conversation content is ignored.
 - **OpenAI** — reads the ChatGPT token from `~/.codex/auth.json` (or `$CODEX_HOME`) and calls the ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) every 60 s. If that fails, it falls back to the rate limits Codex last wrote into its session logs under `~/.codex/sessions/` and marks the card "as of HH:MM (local)".
 - **GitHub Copilot** — uses the first GitHub login it finds: `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the Copilot CLI entry (`copilot-cli`) in the OS keychain, copilot.vim/lua's `github-copilot/apps.json`, or the `gh` CLI login (`hosts.yml`, or its `gh:github.com` keychain entry). Classic `ghp_` tokens in the environment are skipped because Copilot does not accept them. A GitHub login without a Copilot subscription shows "no Copilot subscription"; set `[copilot] enabled = false` to hide the card. It calls GitHub's internal Copilot usage endpoint (`api.github.com/copilot_internal/user`) every 5 minutes.
 - **Cursor** — uses the `cursor-agent` login (`~/.config/cursor/auth.json`, Windows `%APPDATA%\Cursor\auth.json`, or `$CURSOR_CLI_AUTH_FILE`) or the Cursor app's local database (opened read-only), and calls Cursor's usage summary (`cursor.com/api/usage-summary`) every 5 minutes. Cursor logins expire; when that happens the card turns red until you open Cursor (or run `cursor-agent`) again.
@@ -30,7 +30,9 @@ The monitor finds providers automatically by looking for the credentials their C
 
 The Copilot and Cursor endpoints are internal to those services and may change without notice.
 
-**Multiple accounts.** Claude Code and Codex keep each login in its own config folder (selected with `CLAUDE_CONFIG_DIR` / `CODEX_HOME`). The monitor shows `~/.claude` and `~/.codex` plus every folder directly in your home that holds valid credentials, whatever it is called. Each gets its own card, named after the folder: `~/.claude-personal` → **Claude · personal**, `~/.codex_work` → **OpenAI · work**. Folders elsewhere can be added in the configuration.
+**Multiple accounts.** Claude Code and Codex keep each login in its own config folder (selected with `CLAUDE_CONFIG_DIR` / `CODEX_HOME`). The monitor shows `~/.claude` and `~/.codex` plus every folder directly in your home that holds valid credentials, whatever it is called. Each gets its own card, named after the folder: `~/.claude-personal` → **Claude · personal**, `~/.codex_work` → **OpenAI · work**. Names do not depend on `CLAUDE_CONFIG_DIR` / `CODEX_HOME`, so starting the monitor from a shell that has them set changes nothing. Folders elsewhere can be added in the configuration.
+
+**Rate limits and outages.** When a usage endpoint fails or answers HTTP 429, the card keeps the last numbers with a note ("usage as of 14:05 · rate limited") and the monitor waits longer between calls: 2, 4, 8 minutes up to 15, or as long as the server's `Retry-After` asks. The Claude session block keeps updating meanwhile, since it is read from local files.
 
 Unlike version 1.0, the monitor no longer installs or modifies a Claude Code `statusLine`.
 
@@ -100,7 +102,7 @@ On Windows write folder paths with forward slashes (`"D:/other/.claude"`) or in 
 ## Privacy & security
 
 - No telemetry, no account, no cloud service of its own.
-- Credentials are read when each poll runs, held in memory that is wiped after use, and never logged, displayed, cached or written.
+- Credentials are read when each poll runs, held in memory that is wiped after use, and never logged, displayed, cached or written. The usage cache holds only percentages and reset times.
 - Logs (enable with `RUST_LOG`) contain only provider names, HTTP status codes and error kinds.
 - All provider requests use HTTPS with a 15 s timeout; responses are capped at 2 MB.
 - Conversation contents are never read for display or sent anywhere.

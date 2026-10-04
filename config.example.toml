@@ -8,6 +8,7 @@ order = ["claude", "openai", "copilot", "cursor", "minimax"]
 [claude]
 enabled = true
 # context_limit = 200000
+poll_seconds = 120               # minimum 60; shared token with Claude Code
 # hide = ["personal"]            # account names; "default" = ~/.claude
 # Extra accounts outside home or nested deeper:
 # [[claude.accounts]]

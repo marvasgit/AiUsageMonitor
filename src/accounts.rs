@@ -140,7 +140,21 @@ fn dedupe_names(accounts: Vec<Account>) -> Vec<Account> {
         .collect()
 }
 
-/// Accounts for one CLI: its default folder, any home subfolder with valid credentials, then config entries.
+/// Name of a folder found on disk. The CLI's stock folder (`~/.claude`) is the unnamed
+/// default; every other folder is named after itself.
+fn folder_name(dir: &Path, stock: &Path, rules: &Rules) -> String {
+    if canonical(dir) == canonical(stock) {
+        return String::new();
+    }
+    dir.file_name()
+        .and_then(|f| f.to_str())
+        .map(|f| derive_name(f, rules.strip))
+        .unwrap_or_default()
+}
+
+/// Accounts for one CLI: the stock folder, the env-selected folder, any home subfolder
+/// with valid credentials, then config entries. Names never depend on which folder the
+/// environment selects, so launching from a shell with `CLAUDE_CONFIG_DIR` set changes nothing.
 pub fn discover(
     home: &Path,
     default_dir: &Path,
@@ -148,13 +162,21 @@ pub fn discover(
     extra: &[AccountConfig],
     hide: &[String],
 ) -> Vec<Account> {
+    let stock = home.join(format!(".{}", rules.strip));
     let mut found: Vec<(PathBuf, Account)> = Vec::new();
-    if has_valid_credentials(default_dir, rules) {
-        push_unique(&mut found, String::new(), default_dir.to_path_buf());
+    for dir in [stock.as_path(), default_dir] {
+        if has_valid_credentials(dir, rules) {
+            push_unique(
+                &mut found,
+                folder_name(dir, &stock, rules),
+                dir.to_path_buf(),
+            );
+        }
     }
-    for (folder, dir) in home_folders(home) {
+    for (_, dir) in home_folders(home) {
         if has_valid_credentials(&dir, rules) {
-            push_unique(&mut found, derive_name(&folder, rules.strip), dir);
+            let name = folder_name(&dir, &stock, rules);
+            push_unique(&mut found, name, dir);
         }
     }
     for entry in extra {
@@ -259,8 +281,18 @@ mod tests {
         account_dir(h, ".claude", "valid-creds");
         let personal = account_dir(h, ".claude-personal", "valid-creds");
         let found = discover(h, &personal, &RULES, &[], &[]);
-        assert_eq!(names(&found), vec!["", "claude"]);
-        assert_eq!(found[0].dir, personal);
+        assert_eq!(names(&found), vec!["", "personal"]);
+        assert_eq!(found[0].dir, h.join(".claude"));
+        assert_eq!(found[1].dir, personal);
+    }
+
+    #[test]
+    fn default_dir_outside_home_is_named_after_its_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let work = account_dir(elsewhere.path(), ".claude-work", "valid-creds");
+        let found = discover(home.path(), &work, &RULES, &[], &[]);
+        assert_eq!(names(&found), vec!["work"]);
     }
 
     #[test]

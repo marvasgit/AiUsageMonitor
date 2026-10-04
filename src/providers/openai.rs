@@ -3,6 +3,7 @@
 use super::jsonl;
 use super::{read_secret_file, Provider, ProviderError};
 use crate::accounts::Account;
+use crate::backoff::Backoff;
 use crate::config::Config;
 use crate::format::{from_unix_secs, parse_rfc3339, window_label_from_minutes};
 use crate::http;
@@ -213,6 +214,7 @@ pub struct OpenAi {
     codex_home: PathBuf,
     api_base: String,
     live_poll: bool,
+    backoff: Backoff,
 }
 
 impl OpenAi {
@@ -229,6 +231,7 @@ impl OpenAi {
             codex_home: account.dir.clone(),
             api_base: API_BASE.to_string(),
             live_poll: cfg.openai.live_poll,
+            backoff: Backoff::new(POLL_INTERVAL),
         })
     }
 
@@ -236,26 +239,23 @@ impl OpenAi {
         self.api_base = base.into();
         self
     }
+}
 
-    fn poll_live(&self) -> Result<LiveLimits, ProviderError> {
-        let auth = read_secret_file(&self.codex_home.join("auth.json"))
-            .ok_or(ProviderError::NoCredentials)?;
-        let (token, account) = parse_auth(&auth).ok_or(ProviderError::NoCredentials)?;
-        let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
-        let mut headers = vec![
-            ("Authorization", bearer.as_str()),
-            ("Accept", "application/json"),
-        ];
-        if let Some(account) = account.as_deref() {
-            headers.push(("ChatGPT-Account-Id", account));
-        }
-        let resp = http::get(
-            &format!("{}/backend-api/wham/usage", self.api_base),
-            &headers,
-        )?;
-        resp.check()?;
-        parse_live(&resp.body)
+fn poll_live(codex_home: &Path, api_base: &str) -> Result<LiveLimits, ProviderError> {
+    let auth =
+        read_secret_file(&codex_home.join("auth.json")).ok_or(ProviderError::NoCredentials)?;
+    let (token, account) = parse_auth(&auth).ok_or(ProviderError::NoCredentials)?;
+    let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
+    let mut headers = vec![
+        ("Authorization", bearer.as_str()),
+        ("Accept", "application/json"),
+    ];
+    if let Some(account) = account.as_deref() {
+        headers.push(("ChatGPT-Account-Id", account));
     }
+    let resp = http::get(&format!("{api_base}/backend-api/wham/usage"), &headers)?;
+    resp.check()?;
+    parse_live(&resp.body)
 }
 
 impl Provider for OpenAi {
@@ -272,7 +272,13 @@ impl Provider for OpenAi {
     }
 
     fn poll(&mut self) -> Result<ProviderSnapshot, ProviderError> {
-        let live = self.live_poll.then(|| self.poll_live());
+        // Local data stands in while the live call fails, so the poll still succeeds:
+        // the live endpoint needs its own backoff.
+        let (home, base) = (&self.codex_home, &self.api_base);
+        let backoff = &mut self.backoff;
+        let live = self
+            .live_poll
+            .then(|| backoff.call(|| poll_live(home, base)));
         let local = match live {
             Some(Ok(_)) => None,
             _ => find_local(&self.codex_home),
@@ -490,6 +496,26 @@ mod tests {
         let snap = p.poll().unwrap();
         m.assert();
         assert_eq!(snap.plan.as_deref(), Some("plus"));
+    }
+
+    #[test]
+    fn rate_limited_live_call_backs_off_while_local_data_is_shown() {
+        let home = home_with_auth();
+        write_session(home.path(), "2026/10/03/a.jsonl", SESSION, 1_000);
+        let server = MockServer::start();
+        let limited = server.mock(|when, then| {
+            when.method(GET).path("/backend-api/wham/usage");
+            then.status(429);
+        });
+        let mut p = OpenAi::detect(
+            &Config::default(),
+            &Account::new("", home.path().join(".codex")),
+        )
+        .unwrap()
+        .with_api_base(server.base_url());
+        assert!(p.poll().unwrap().note.is_some());
+        assert!(p.poll().unwrap().note.is_some());
+        limited.assert_calls(1);
     }
 
     #[test]

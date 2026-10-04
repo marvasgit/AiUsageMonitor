@@ -1,7 +1,7 @@
 //! Minimal blocking HTTPS GET with timeout and body cap.
 
 use crate::model::ProviderError;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 pub const BODY_LIMIT: u64 = 2 * 1024 * 1024;
@@ -10,7 +10,7 @@ pub const BODY_LIMIT: u64 = 2 * 1024 * 1024;
 pub struct HttpResponse {
     pub status: u16,
     pub body: String,
-    /// `Retry-After` in seconds; the HTTP-date form is ignored.
+    /// `Retry-After`, from either its seconds or its HTTP-date form.
     pub retry_after: Option<Duration>,
 }
 
@@ -48,8 +48,7 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, Provider
         .headers()
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(Duration::from_secs);
+        .and_then(|v| parse_retry_after(v, SystemTime::now()));
     let body = resp
         .body_mut()
         .with_config()
@@ -61,6 +60,16 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, Provider
         body,
         retry_after,
     })
+}
+
+/// `Retry-After` is either delay seconds or an HTTP date; a date in the past means now.
+pub fn parse_retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    let at: SystemTime = chrono::DateTime::parse_from_rfc2822(value).ok()?.into();
+    Some(at.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 pub fn check_status(status: u16) -> Result<(), ProviderError> {
@@ -150,11 +159,30 @@ mod tests {
             Err(ProviderError::RateLimited(Some(Duration::from_secs(300))))
         );
         server.mock(|when, then| {
-            when.method(GET).path("/limited-date");
-            then.status(429)
-                .header("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT");
+            when.method(GET).path("/limited-junk");
+            then.status(429).header("retry-after", "soon");
         });
-        let resp = get(&server.url("/limited-date"), &[]).unwrap();
+        let resp = get(&server.url("/limited-junk"), &[]).unwrap();
         assert_eq!(resp.check(), Err(ProviderError::RateLimited(None)));
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates() {
+        let now: SystemTime = chrono::DateTime::parse_from_rfc2822("Wed, 21 Oct 2026 07:28:00 GMT")
+            .unwrap()
+            .into();
+        assert_eq!(
+            parse_retry_after(" 90 ", now),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(
+            parse_retry_after("Wed, 21 Oct 2026 07:30:00 GMT", now),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            parse_retry_after("Wed, 21 Oct 2026 07:00:00 GMT", now),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(parse_retry_after("soon", now), None);
     }
 }

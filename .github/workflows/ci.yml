@@ -50,12 +50,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      # Pinned to commits: this job can write to the repository.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - name: Checksums
+        run: sha256sum ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor-windows-x86_64.zip > SHA256SUMS
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             ai-usage-monitor-linux-x86_64.tar.gz
             ai-usage-monitor-windows-x86_64.zip
+            SHA256SUMS

@@ -70,7 +70,7 @@ pub fn all_providers(cfg: &Config, paths: &Paths) -> Vec<Box<dyn Provider>> {
             &claude.hide,
         ) {
             if let Some(p) = Claude::detect(cfg, &account) {
-                found.push(Box::new(p));
+                found.push(Box::new(p.with_cache_dir(&paths.cache_dir)));
             }
         }
     }

@@ -11,6 +11,8 @@ pub struct Paths {
     pub claude_dir: PathBuf,
     pub codex_home: PathBuf,
     pub mmx_dir: PathBuf,
+    /// App cache (last known usage): XDG cache dir on Linux, `%LOCALAPPDATA%` on Windows.
+    pub cache_dir: PathBuf,
     /// Per-user config root: XDG config dir on Linux, `%APPDATA%` on Windows.
     pub config_home: PathBuf,
     /// `%LOCALAPPDATA%` on Windows; same as `config_home` elsewhere.
@@ -26,7 +28,11 @@ impl Paths {
             .join(APP_DIR);
         let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
         let codex = std::env::var_os("CODEX_HOME").map(PathBuf::from);
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(|| home.join(".cache"))
+            .join(APP_DIR);
         let mut paths = Self::with_overrides(home, config_dir, claude, codex);
+        paths.cache_dir = cache_dir;
         paths.config_home = dirs::config_dir().unwrap_or_else(|| paths.home.join(".config"));
         paths.local_config_home =
             dirs::config_local_dir().unwrap_or_else(|| paths.config_home.clone());
@@ -53,6 +59,7 @@ impl Paths {
             claude_dir: claude_dir.unwrap_or_else(|| home.join(".claude")),
             codex_home: codex_home.unwrap_or_else(|| home.join(".codex")),
             mmx_dir: home.join(".mmx"),
+            cache_dir: home.join(".cache").join(APP_DIR),
             config_home: home.join(".config"),
             local_config_home: home.join(".config"),
             config_dir,
@@ -75,6 +82,7 @@ mod tests {
         assert_eq!(p.claude_dir, PathBuf::from("/h/.claude"));
         assert_eq!(p.codex_home, PathBuf::from("/h/.codex"));
         assert_eq!(p.mmx_dir, PathBuf::from("/h/.mmx"));
+        assert_eq!(p.cache_dir, PathBuf::from("/h/.cache/ai-usage-monitor"));
         assert_eq!(p.config_home, PathBuf::from("/h/.config"));
         assert_eq!(p.local_config_home, PathBuf::from("/h/.config"));
         assert_eq!(

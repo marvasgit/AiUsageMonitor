@@ -2,8 +2,11 @@
 
 use serde::Deserialize;
 use std::path::Path;
+use std::time::Duration;
 
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
+const CLAUDE_DEFAULT_POLL_SECS: u64 = 120;
+const CLAUDE_MIN_POLL_SECS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
@@ -42,6 +45,8 @@ impl Default for Config {
 pub struct ClaudeConfig {
     pub enabled: bool,
     pub context_limit: Option<u64>,
+    /// Seconds between usage-endpoint calls; the token is shared with Claude Code.
+    pub poll_seconds: u64,
     pub hide: Vec<String>,
     pub accounts: Vec<AccountConfig>,
 }
@@ -51,9 +56,17 @@ impl Default for ClaudeConfig {
         Self {
             enabled: true,
             context_limit: None,
+            poll_seconds: CLAUDE_DEFAULT_POLL_SECS,
             hide: Vec::new(),
             accounts: Vec::new(),
         }
+    }
+}
+
+impl ClaudeConfig {
+    /// `poll_seconds`, but never below the minimum.
+    pub fn poll_interval(&self) -> Duration {
+        Duration::from_secs(self.poll_seconds.max(CLAUDE_MIN_POLL_SECS))
     }
 }
 
@@ -171,6 +184,16 @@ pub fn load_or_default(path: &Path) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_poll_interval_defaults_and_minimum() {
+        let mut c = ClaudeConfig::default();
+        assert_eq!(c.poll_interval(), Duration::from_secs(120));
+        c.poll_seconds = 5;
+        assert_eq!(c.poll_interval(), Duration::from_secs(60));
+        c.poll_seconds = 300;
+        assert_eq!(c.poll_interval(), Duration::from_secs(300));
+    }
 
     #[test]
     fn empty_text_gives_defaults() {
