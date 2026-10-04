@@ -2,7 +2,7 @@
 
 use super::theme;
 use crate::format::{fmt_absolute, fmt_countdown, fmt_tokens, pct_level};
-use crate::model::{ProviderError, ProviderState, ProviderStatus, Session, Window};
+use crate::model::{ProviderState, ProviderStatus, Session, Window};
 use egui::{Color32, RichText, Sense, Vec2};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -23,7 +23,7 @@ fn status_color(status: &ProviderStatus) -> Color32 {
     match status {
         ProviderStatus::Pending => theme::PENDING,
         ProviderStatus::Ok => theme::OK,
-        ProviderStatus::Error(ProviderError::Network(_) | ProviderError::Parse(_)) => theme::WARN,
+        ProviderStatus::Error(e) if e.is_transient() => theme::WARN,
         ProviderStatus::Error(_) => theme::CRIT,
     }
 }

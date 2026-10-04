@@ -193,7 +193,7 @@ impl Provider for MiniMax {
                 ("Accept", "application/json"),
             ],
         )?;
-        http::check_status(resp.status)?;
+        resp.check()?;
         let mut snap = ProviderSnapshot::new(parse_remains(&resp.body, &self.models)?);
         snap.plan = Some(PLAN_NAME.to_string());
         Ok(snap)

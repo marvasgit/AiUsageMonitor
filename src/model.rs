@@ -1,6 +1,6 @@
 //! Provider-neutral data model shared by providers, poller and UI.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ProviderError {
@@ -12,6 +12,19 @@ pub enum ProviderError {
     Network(String),
     #[error("unexpected response: {0}")]
     Parse(String),
+    /// HTTP 429, with the server's `Retry-After` when it sent one.
+    #[error("rate limited")]
+    RateLimited(Option<Duration>),
+}
+
+impl ProviderError {
+    /// Failures worth retrying later; the last good data stays on screen meanwhile.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Network(_) | Self::Parse(_) | Self::RateLimited(_)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

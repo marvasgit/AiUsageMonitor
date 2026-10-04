@@ -327,7 +327,7 @@ impl Provider for Copilot {
                 "no Copilot subscription for this account".into(),
             ));
         }
-        http::check_status(resp.status)?;
+        resp.check()?;
         let (windows, plan) = parse_usage(&resp.body)?;
         let mut snapshot = ProviderSnapshot::new(windows);
         snapshot.plan = plan;

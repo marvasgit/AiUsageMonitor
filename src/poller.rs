@@ -10,17 +10,27 @@ pub type SharedState = Arc<RwLock<Vec<ProviderState>>>;
 
 pub const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
 
-/// Network/parse failures back off exponentially (at least 2 × interval, at most 15 min).
+/// Transient failures back off exponentially (at least 2 × interval, at most 15 min),
+/// and never retry sooner than a rate limit's `Retry-After`.
 pub fn next_delay(
     result: &Result<ProviderSnapshot, ProviderError>,
     prev: Duration,
     interval: Duration,
 ) -> Duration {
     match result {
-        Err(ProviderError::Network(_) | ProviderError::Parse(_)) => {
-            (prev * 2).max(interval * 2).min(MAX_BACKOFF).max(interval)
-        }
-        _ => interval,
+        Err(e) => error_delay(e, prev, interval),
+        Ok(_) => interval,
+    }
+}
+
+pub fn error_delay(err: &ProviderError, prev: Duration, interval: Duration) -> Duration {
+    if !err.is_transient() {
+        return interval;
+    }
+    let backoff = (prev * 2).max(interval * 2).min(MAX_BACKOFF).max(interval);
+    match err {
+        ProviderError::RateLimited(Some(after)) => backoff.max((*after).min(MAX_BACKOFF)),
+        _ => backoff,
     }
 }
 
@@ -93,6 +103,16 @@ mod tests {
             I
         );
         assert_eq!(next_delay(&Err(ProviderError::NoCredentials), I, I), I);
+        let limited = |s| Err(ProviderError::RateLimited(s));
+        assert_eq!(next_delay(&limited(None), I, I), Duration::from_secs(120));
+        assert_eq!(
+            next_delay(&limited(Some(Duration::from_secs(500))), I, I),
+            Duration::from_secs(500)
+        );
+        assert_eq!(
+            next_delay(&limited(Some(Duration::from_secs(86_400))), I, I),
+            MAX_BACKOFF
+        );
     }
 
     struct Scripted(VecDeque<Result<ProviderSnapshot, ProviderError>>);

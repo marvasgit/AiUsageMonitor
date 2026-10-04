@@ -253,7 +253,7 @@ impl OpenAi {
             &format!("{}/backend-api/wham/usage", self.api_base),
             &headers,
         )?;
-        http::check_status(resp.status)?;
+        resp.check()?;
         parse_live(&resp.body)
     }
 }

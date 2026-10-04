@@ -284,7 +284,7 @@ impl Provider for Cursor {
             &format!("{}/api/usage-summary", self.api_base),
             &[("Accept", "application/json"), ("Cookie", cookie.as_str())],
         )?;
-        http::check_status(resp.status)?;
+        resp.check()?;
         let usage = parse_usage(&resp.body)?;
         let mut snapshot = ProviderSnapshot::new(usage.windows);
         snapshot.plan = usage.plan;

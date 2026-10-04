@@ -10,6 +10,18 @@ pub const BODY_LIMIT: u64 = 2 * 1024 * 1024;
 pub struct HttpResponse {
     pub status: u16,
     pub body: String,
+    /// `Retry-After` in seconds; the HTTP-date form is ignored.
+    pub retry_after: Option<Duration>,
+}
+
+impl HttpResponse {
+    /// Like [`check_status`], but a 429 carries the server's `Retry-After`.
+    pub fn check(&self) -> Result<(), ProviderError> {
+        match self.status {
+            429 => Err(ProviderError::RateLimited(self.retry_after)),
+            status => check_status(status),
+        }
+    }
 }
 
 fn agent() -> ureq::Agent {
@@ -32,19 +44,30 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, Provider
         .call()
         .map_err(|e| ProviderError::Network(e.to_string()))?;
     let status = resp.status().as_u16();
+    let retry_after = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
     let body = resp
         .body_mut()
         .with_config()
         .limit(BODY_LIMIT)
         .read_to_string()
         .map_err(|e| ProviderError::Network(e.to_string()))?;
-    Ok(HttpResponse { status, body })
+    Ok(HttpResponse {
+        status,
+        body,
+        retry_after,
+    })
 }
 
 pub fn check_status(status: u16) -> Result<(), ProviderError> {
     match status {
         200..=299 => Ok(()),
         401 | 403 => Err(ProviderError::Auth),
+        429 => Err(ProviderError::RateLimited(None)),
         other => Err(ProviderError::Network(format!("HTTP {other}"))),
     }
 }
@@ -111,9 +134,27 @@ mod tests {
             check_status(500),
             Err(ProviderError::Network("HTTP 500".into()))
         );
+        assert_eq!(check_status(429), Err(ProviderError::RateLimited(None)));
+    }
+
+    #[test]
+    fn rate_limit_carries_retry_after() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/limited");
+            then.status(429).header("retry-after", "300");
+        });
+        let resp = get(&server.url("/limited"), &[]).unwrap();
         assert_eq!(
-            check_status(429),
-            Err(ProviderError::Network("HTTP 429".into()))
+            resp.check(),
+            Err(ProviderError::RateLimited(Some(Duration::from_secs(300))))
         );
+        server.mock(|when, then| {
+            when.method(GET).path("/limited-date");
+            then.status(429)
+                .header("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT");
+        });
+        let resp = get(&server.url("/limited-date"), &[]).unwrap();
+        assert_eq!(resp.check(), Err(ProviderError::RateLimited(None)));
     }
 }

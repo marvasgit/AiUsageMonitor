@@ -7,9 +7,10 @@ use crate::config::Config;
 use crate::format::parse_rfc3339;
 use crate::http;
 use crate::model::{ProviderSnapshot, Session, Window};
+use crate::poller;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use zeroize::Zeroizing;
 
 pub const API_BASE: &str = "https://api.anthropic.com";
@@ -166,6 +167,13 @@ pub fn scan_session(text: &str, limit_override: Option<u64>) -> Option<Session> 
     Some(s)
 }
 
+/// Holds off the usage endpoint after a transient failure while cached windows are shown.
+struct UsageBackoff {
+    until: Instant,
+    delay: Duration,
+    error: ProviderError,
+}
+
 struct SessionCache {
     file: FileInfo,
     session: Option<Session>,
@@ -179,6 +187,7 @@ pub struct Claude {
     limit_override: Option<u64>,
     cache: Option<SessionCache>,
     last_usage: Option<(Vec<Window>, SystemTime)>,
+    backoff: Option<UsageBackoff>,
 }
 
 impl Claude {
@@ -197,6 +206,7 @@ impl Claude {
             limit_override: cfg.claude.context_limit,
             cache: None,
             last_usage: None,
+            backoff: None,
         })
     }
 
@@ -215,8 +225,32 @@ impl Claude {
                 ("Accept", "application/json"),
             ],
         )?;
-        http::check_status(resp.status)?;
+        resp.check()?;
         parse_usage(&resp.body)
+    }
+
+    /// Calls the endpoint unless backing off. Polls that serve cached windows still
+    /// succeed, so the poller would not slow down on its own.
+    fn usage(&mut self, token: &str) -> Result<Vec<Window>, ProviderError> {
+        if let Some(b) = &self.backoff {
+            if Instant::now() < b.until {
+                return Err(b.error.clone());
+            }
+        }
+        let result = self.fetch_usage(token);
+        self.backoff = match &result {
+            Err(e) if e.is_transient() => {
+                let prev = self.backoff.as_ref().map_or(Duration::ZERO, |b| b.delay);
+                let delay = poller::error_delay(e, prev, POLL_INTERVAL);
+                Some(UsageBackoff {
+                    until: Instant::now() + delay,
+                    delay,
+                    error: e.clone(),
+                })
+            }
+            _ => None,
+        };
+        result
     }
 
     /// Rescans the newest session log only when its path, size or mtime changed.
@@ -255,7 +289,7 @@ impl Provider for Claude {
         let creds = read_secret_file(&self.claude_dir.join(".credentials.json"))
             .ok_or(ProviderError::NoCredentials)?;
         let (token, plan) = parse_credentials(&creds).ok_or(ProviderError::NoCredentials)?;
-        let usage = self.fetch_usage(&token);
+        let usage = self.usage(&token);
         let session = self.current_session();
         let mut snapshot = match (usage, &self.last_usage) {
             (Ok(windows), _) => {
@@ -263,10 +297,7 @@ impl Provider for Claude {
                 ProviderSnapshot::new(windows)
             }
             // The session is local and always readable: keep it live while the API is down.
-            (
-                Err(e @ (ProviderError::Network(_) | ProviderError::Parse(_))),
-                Some((windows, at)),
-            ) => {
+            (Err(e), Some((windows, at))) if e.is_transient() => {
                 let at: chrono::DateTime<chrono::Local> = (*at).into();
                 let mut snap = ProviderSnapshot::new(windows.clone());
                 snap.note = Some(format!("usage as of {} · {e}", at.format("%H:%M")));
@@ -516,7 +547,37 @@ mod tests {
             when.method(GET).path("/api/oauth/usage");
             then.status(401);
         });
+        assert!(p.poll().is_ok(), "still backing off: no request");
+        p.backoff = None;
         assert_eq!(p.poll(), Err(ProviderError::Auth));
+    }
+
+    #[test]
+    fn rate_limit_backs_off_while_showing_cached_usage() {
+        let home = home_with_creds();
+        let server = MockServer::start();
+        let mut ok = server.mock(|when, then| {
+            when.method(GET).path("/api/oauth/usage");
+            then.status(200).body(USAGE);
+        });
+        let mut p = Claude::detect(
+            &Config::default(),
+            &Account::new("", home.path().join(".claude")),
+        )
+        .unwrap()
+        .with_api_base(server.base_url());
+        p.poll().unwrap();
+        ok.delete();
+        let limited = server.mock(|when, then| {
+            when.method(GET).path("/api/oauth/usage");
+            then.status(429).header("retry-after", "600");
+        });
+        let snap = p.poll().unwrap();
+        assert_eq!(snap.windows.len(), 2, "cached windows kept");
+        assert!(snap.note.unwrap().contains("rate limited"));
+        let snap = p.poll().unwrap();
+        assert!(snap.note.unwrap().contains("rate limited"));
+        limited.assert_calls(1);
     }
 
     #[test]
