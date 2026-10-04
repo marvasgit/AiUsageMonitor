@@ -1,0 +1,15 @@
+{
+  "user_id": "user-test",
+  "account_id": "acct-test",
+  "email": "test@example.com",
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {"used_percent": 31, "limit_window_seconds": 18000, "reset_after_seconds": 7260, "reset_at": 1791044262},
+    "secondary_window": {"used_percent": 16, "limit_window_seconds": 604800, "reset_after_seconds": 577565, "reset_at": 1791603826}
+  },
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": {"has_credits": false, "unlimited": false, "balance": "0"}
+}

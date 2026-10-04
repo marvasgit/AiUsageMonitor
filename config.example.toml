@@ -1,0 +1,36 @@
+# AI Usage Monitor configuration. Every key is optional.
+# Linux:   ~/.config/ai-usage-monitor/config.toml
+# Windows: %APPDATA%\ai-usage-monitor\config.toml
+
+always_on_top = false
+order = ["claude", "openai", "copilot", "cursor", "minimax"]
+
+[claude]
+enabled = true
+# context_limit = 200000
+# hide = ["personal"]            # account names; "default" = ~/.claude
+# Extra accounts outside home or nested deeper:
+# [[claude.accounts]]
+# name = "work"
+# dir = "/mnt/other/.claude"
+# Windows: use forward slashes or single quotes, e.g. dir = 'D:\other\.claude'
+
+[openai]
+enabled = true
+live_poll = true
+# hide = []
+# [[openai.accounts]]
+# name = "work"
+# dir = "~/projects/.codex-work"
+
+[copilot]
+enabled = true
+
+[cursor]
+enabled = true
+
+[minimax]
+enabled = true
+api_key_env = "MINIMAX_API_KEY"
+# region = "global"      # or "cn"
+models = ["general"]

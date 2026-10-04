@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux GUI deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/ai-usage-monitor
+          cp target/release/ai-usage-monitor assets/ai-usage-monitor.desktop assets/icon.png config.example.toml README.md LICENSE dist/ai-usage-monitor/
+          tar -C dist -czf ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/ai-usage-monitor.exe,config.example.toml,README.md,LICENSE -DestinationPath ai-usage-monitor-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-usage-monitor-${{ runner.os }}
+          path: |
+            ai-usage-monitor-linux-x86_64.tar.gz
+            ai-usage-monitor-windows-x86_64.zip
+          if-no-files-found: ignore
