@@ -1,9 +1,10 @@
 # AI Usage Monitor configuration. Every key is optional.
 # Linux:   ~/.config/ai-usage-monitor/config.toml
 # Windows: %APPDATA%\ai-usage-monitor\config.toml
+# macOS:   ~/Library/Application Support/ai-usage-monitor/config.toml
 
 always_on_top = false
-order = ["claude", "openai", "copilot", "cursor", "minimax"]
+order = ["claude", "openai", "copilot", "cursor", "minimax", "openrouter"]
 
 [claude]
 enabled = true
@@ -35,3 +36,15 @@ enabled = true
 api_key_env = "MINIMAX_API_KEY"
 # region = "global"      # or "cn"
 models = ["general"]
+
+[openrouter]
+enabled = true
+api_key_env = "OPENROUTER_API_KEY"
+
+[omp]                            # omp's Claude login (also off when [claude] is off)
+enabled = true
+db = "~/.omp/agent/agent.db"
+
+[omo]                            # omo's Claude login (also off when [claude] is off)
+enabled = true
+auth = "~/.omo/agent/auth.json"

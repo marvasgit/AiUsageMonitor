@@ -1,9 +1,9 @@
 //! Discovery of CLI account folders: one config folder per logged-in account.
 
 use crate::config::AccountConfig;
-use crate::providers::read_secret_file;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 const SEPARATORS: &[char] = &['-', '_', '.'];
 const DEFAULT_ALIAS: &str = "default";
@@ -38,7 +38,8 @@ impl Account {
 
 /// What makes a folder an account for one CLI.
 pub struct Rules<'a> {
-    pub cred_file: &'a str,
+    /// Reads the folder's credentials (a file, or the OS keychain).
+    pub read: fn(&Path) -> Option<Zeroizing<String>>,
     pub is_valid: fn(&str) -> bool,
     /// Word removed from folder names to derive account names ("claude", "codex").
     pub strip: &'a str,
@@ -92,7 +93,7 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 fn has_valid_credentials(dir: &Path, rules: &Rules) -> bool {
-    read_secret_file(&dir.join(rules.cred_file)).is_some_and(|text| (rules.is_valid)(&text))
+    (rules.read)(dir).is_some_and(|text| (rules.is_valid)(&text))
 }
 
 /// Direct subfolders of `home` (symlinks followed), sorted by folder name.
@@ -188,9 +189,8 @@ pub fn discover(
             found.push((key, Account::new(entry.name.clone(), dir)));
         } else {
             log::warn!(
-                "account {:?}: no valid {} in {}",
+                "account {:?}: no valid credentials in {}",
                 entry.name,
-                rules.cred_file,
                 dir.display()
             );
         }
@@ -203,6 +203,7 @@ pub fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::read_secret_file;
     use std::fs;
 
     fn valid(text: &str) -> bool {
@@ -210,7 +211,7 @@ mod tests {
     }
 
     const RULES: Rules<'static> = Rules {
-        cred_file: "creds.json",
+        read: |dir| read_secret_file(&dir.join("creds.json")),
         is_valid: valid,
         strip: "claude",
     };

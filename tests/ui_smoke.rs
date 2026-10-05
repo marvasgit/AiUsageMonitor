@@ -13,6 +13,7 @@ fn states() -> Vec<ProviderState> {
         Window::new("7d", 91.0, Some(now + Duration::from_secs(3 * 86_400))),
     ]);
     snap.plan = Some("max".into());
+    snap.source = Some("omo · live".into());
     snap.session = Some(Session {
         model: "claude-sonnet-5".into(),
         effort: Some("medium".into()),
@@ -47,6 +48,7 @@ fn renders_all_provider_cards() {
     harness.get_by_label_contains("OPENAI");
     harness.get_by_label_contains("MINIMAX");
     harness.get_by_label_contains("claude-sonnet-5 (medium)");
+    harness.get_by_label("omo · live");
     harness.get_by_label_contains("72.2K / 200.0K");
     harness.get_by_label_contains("as of 10:06 (local)");
     harness.get_by_label_contains("authentication rejected");

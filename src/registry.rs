@@ -8,7 +8,8 @@ use crate::providers::copilot::Copilot;
 use crate::providers::cursor::Cursor;
 use crate::providers::minimax::MiniMax;
 use crate::providers::openai::{self, OpenAi};
-use crate::providers::Provider;
+use crate::providers::openrouter::OpenRouter;
+use crate::providers::{real_env, Provider};
 use std::path::Path;
 use std::time::Duration;
 
@@ -24,12 +25,12 @@ fn codex_valid(text: &str) -> bool {
 }
 
 const CLAUDE_RULES: Rules<'static> = Rules {
-    cred_file: ".credentials.json",
+    read: claude::read_credentials,
     is_valid: claude_valid,
     strip: "claude",
 };
 const CODEX_RULES: Rules<'static> = Rules {
-    cred_file: "auth.json",
+    read: openai::read_auth,
     is_valid: codex_valid,
     strip: "codex",
 };
@@ -62,16 +63,23 @@ pub fn all_providers(cfg: &Config, paths: &Paths) -> Vec<Box<dyn Provider>> {
     let mut found: Vec<Box<dyn Provider>> = Vec::new();
     if cfg.claude.enabled {
         let claude = &cfg.claude;
-        for account in accounts_for(
+        let cards: Vec<Claude> = accounts_for(
             paths,
             &paths.claude_dir,
             &CLAUDE_RULES,
             &claude.accounts,
             &claude.hide,
-        ) {
-            if let Some(p) = Claude::detect(cfg, &account) {
-                found.push(Box::new(p.with_cache_dir(&paths.cache_dir)));
-            }
+        )
+        .iter()
+        .filter_map(|account| Claude::detect(cfg, account))
+        .collect();
+        let logins = claude::agent_logins(
+            cfg,
+            &accounts::expand_home(&cfg.omo.auth, &paths.home),
+            &accounts::expand_home(&cfg.omp.db, &paths.home),
+        );
+        for card in claude::merge_agent_logins(cfg, cards, logins, claude::API_BASE) {
+            found.push(Box::new(card.with_cache_dir(&paths.cache_dir)));
         }
     }
     if cfg.openai.enabled {
@@ -95,6 +103,9 @@ pub fn all_providers(cfg: &Config, paths: &Paths) -> Vec<Box<dyn Provider>> {
         found.push(Box::new(p));
     }
     if let Some(p) = MiniMax::detect(cfg, paths) {
+        found.push(Box::new(p));
+    }
+    if let Some(p) = OpenRouter::detect(cfg, real_env) {
         found.push(Box::new(p));
     }
     let rank = |id: &str| {
@@ -136,6 +147,7 @@ mod tests {
     fn cfg() -> Config {
         let mut cfg = Config::default();
         cfg.minimax.api_key_env = "AUM_TEST_UNSET_MINIMAX_KEY".into();
+        cfg.openrouter.api_key_env = "AUM_TEST_UNSET_OPENROUTER_KEY".into();
         // Copilot reads the real env/keychain; covered by its own tests.
         cfg.copilot.enabled = false;
         cfg
