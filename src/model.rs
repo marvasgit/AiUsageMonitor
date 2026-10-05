@@ -32,6 +32,10 @@ pub struct Window {
     pub label: String,
     pub used_pct: f64,
     pub resets_at: Option<SystemTime>,
+    /// Shown instead of the percentage, e.g. "$4.20".
+    pub amount: Option<String>,
+    /// False when there is no limit to measure `used_pct` against.
+    pub bar: bool,
 }
 
 impl Window {
@@ -45,6 +49,23 @@ impl Window {
             label: label.into(),
             used_pct,
             resets_at,
+            amount: None,
+            bar: true,
+        }
+    }
+
+    /// A money window: `amount` is shown instead of the percentage; the bar is drawn
+    /// only when there is a limit to measure against (`used_pct`).
+    pub fn amount(
+        label: impl Into<String>,
+        amount: String,
+        used_pct: Option<f64>,
+        resets_at: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            amount: Some(amount),
+            bar: used_pct.is_some(),
+            ..Self::new(label, used_pct.unwrap_or(0.0), resets_at)
         }
     }
 }
@@ -81,6 +102,8 @@ pub struct ProviderSnapshot {
     pub windows: Vec<Window>,
     pub session: Option<Session>,
     pub note: Option<String>,
+    /// Where the numbers came from, e.g. "omo · live" or "omp saved".
+    pub source: Option<String>,
     pub updated_at: SystemTime,
 }
 
@@ -91,6 +114,7 @@ impl ProviderSnapshot {
             windows,
             session: None,
             note: None,
+            source: None,
             updated_at: SystemTime::now(),
         }
     }

@@ -61,8 +61,15 @@ fn window_row(
 ) -> egui::Response {
     ui.horizontal(|ui| {
         row_label(ui, &window.label);
-        bar(ui, window.used_pct);
-        ui.monospace(format!("{:>5.1}%", window.used_pct));
+        if window.bar {
+            bar(ui, window.used_pct);
+        } else {
+            ui.allocate_exact_size(Vec2::new(BAR_WIDTH, BAR_HEIGHT), Sense::hover());
+        }
+        match &window.amount {
+            Some(amount) => ui.monospace(format!("{amount:>6}")),
+            None => ui.monospace(format!("{:>5.1}%", window.used_pct)),
+        };
         let reset = RichText::new(reset_text(window, now, mode))
             .monospace()
             .color(theme::MUTED);
@@ -109,6 +116,12 @@ fn header(ui: &mut egui::Ui, state: &ProviderState) {
         );
         if let Some(plan) = snap.and_then(|s| s.plan.as_deref()) {
             ui.label(RichText::new(plan).color(theme::MUTED));
+        }
+        if let Some(source) = snap.and_then(|s| s.source.as_deref()) {
+            ui.label(RichText::new(source).small().color(theme::MUTED))
+                .on_hover_text(
+                    "Login that answered (CC = Claude Code) · how the numbers were obtained",
+                );
         }
         if let Some(session) = snap.and_then(|s| s.session.as_ref()) {
             let model = match &session.effort {

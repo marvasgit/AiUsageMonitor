@@ -13,7 +13,7 @@ const ALWAYS_ON_TOP_KEY: &str = "always_on_top";
 const REPAINT_EVERY: Duration = Duration::from_secs(1);
 const CARD_GAP: f32 = 6.0;
 const WINDOW_PADDING: f32 = 24.0;
-const NO_PROVIDERS: &str = "No providers detected.\n\nLooked for:\n  Claude Code: .credentials.json in ~/.claude or any folder in your home\n  Codex CLI: auth.json in ~/.codex or any folder in your home\n  GitHub Copilot: Copilot CLI, copilot.vim or gh login\n  Cursor: Cursor app or cursor-agent login\n  MiniMax: ~/.mmx/config.json or $MINIMAX_API_KEY";
+const NO_PROVIDERS: &str = "No providers detected.\n\nLooked for:\n  Claude Code: .credentials.json (macOS: keychain) in ~/.claude or any folder in your home\n  Codex CLI: auth.json in ~/.codex or any folder in your home\n  GitHub Copilot: Copilot CLI, copilot.vim or gh login\n  Cursor: Cursor app or cursor-agent login\n  MiniMax: ~/.mmx/config.json or $MINIMAX_API_KEY\n  OpenRouter: $OPENROUTER_API_KEY";
 
 /// Draws all cards; returns the responses of every clickable reset-time label.
 pub fn draw_body(
@@ -138,6 +138,8 @@ fn open_folder(dir: &Path) {
     };
     let program = if cfg!(windows) {
         "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
     } else {
         "xdg-open"
     };

@@ -6,6 +6,7 @@ pub mod cursor;
 pub mod jsonl;
 pub mod minimax;
 pub mod openai;
+pub mod openrouter;
 pub mod usage_cache;
 
 pub use crate::model::ProviderError;

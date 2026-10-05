@@ -13,6 +13,25 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use zeroize::Zeroizing;
 
+/// Codex CLI's login for one Codex home: `auth.json`, or on macOS the `Codex Auth`
+/// keychain item (account `cli|<first 16 hex of SHA-256 of the folder path>`) that
+/// Codex writes when `cli_auth_credentials_store` is `keyring` or `auto`.
+pub fn read_auth(dir: &Path) -> Option<Zeroizing<String>> {
+    read_secret_file(&dir.join("auth.json")).or_else(|| keychain_auth(dir))
+}
+
+#[cfg(target_os = "macos")]
+fn keychain_auth(dir: &Path) -> Option<Zeroizing<String>> {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let account = format!("cli|{}", crate::keychain::path_hash(&dir, 8));
+    crate::keychain::lookup_account("Codex Auth", &account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_auth(_dir: &Path) -> Option<Zeroizing<String>> {
+    None
+}
+
 pub const API_BASE: &str = "https://chatgpt.com";
 
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
@@ -222,7 +241,7 @@ impl OpenAi {
         if !cfg.openai.enabled {
             return None;
         }
-        let auth = read_secret_file(&account.dir.join("auth.json"))?;
+        let auth = read_auth(&account.dir)?;
         parse_auth(&auth)?;
         let (id, name) = account.identity("openai", "OpenAI");
         Some(Self {
@@ -242,8 +261,7 @@ impl OpenAi {
 }
 
 fn poll_live(codex_home: &Path, api_base: &str) -> Result<LiveLimits, ProviderError> {
-    let auth =
-        read_secret_file(&codex_home.join("auth.json")).ok_or(ProviderError::NoCredentials)?;
+    let auth = read_auth(codex_home).ok_or(ProviderError::NoCredentials)?;
     let (token, account) = parse_auth(&auth).ok_or(ProviderError::NoCredentials)?;
     let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
     let mut headers = vec![

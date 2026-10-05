@@ -2,7 +2,7 @@
 
 **Version 2.0.2**
 
-A small native desktop app for **Windows and Linux** that shows how much of your AI subscription you have used, at a glance. It supports **Claude** (Claude Code), **OpenAI** (ChatGPT plan used through the Codex CLI), **GitHub Copilot**, **Cursor** and **MiniMax** (Coding Plan), and is built so more providers can be added with one source file each.
+A small native desktop app for **Windows, Linux and macOS** that shows how much of your AI subscription you have used, at a glance. It supports **Claude** (Claude Code), **OpenAI** (ChatGPT plan used through the Codex CLI), **GitHub Copilot**, **Cursor** and **MiniMax** (Coding Plan), and is built so more providers can be added with one source file each.
 
 One window, one card per provider (and one per account if you use several Claude or Codex logins), each with its rate-limit windows, a usage bar and a reset countdown.
 
@@ -22,11 +22,15 @@ Bars turn amber at 60 % and red at 85 %. Click a reset time to switch between a 
 
 The monitor finds providers automatically by looking for the credentials their CLIs already store. It only **reads** those files; it never writes to them and never stores its own copy.
 
-- **Claude** — reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls Anthropic's usage endpoint (`api.anthropic.com/api/oauth/usage`) every 120 s (`[claude] poll_seconds`, at least 60). Claude Code uses the same endpoint with the same token, so polling too often gets it rate-limited. The last reading is kept in the cache folder (`~/.cache/ai-usage-monitor`, Windows `%LOCALAPPDATA%\ai-usage-monitor`) so a restart shows it at once. The session block is computed from the newest Claude Code log under `~/.claude/projects/`. Only token counts, model and effort are read; conversation content is ignored.
-- **OpenAI** — reads the ChatGPT token from `~/.codex/auth.json` (or `$CODEX_HOME`) and calls the ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) every 60 s. If that fails, it falls back to the rate limits Codex last wrote into its session logs under `~/.codex/sessions/` and marks the card "as of HH:MM (local)".
+- **Claude** — reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls Anthropic's usage endpoint (`api.anthropic.com/api/oauth/usage`) every 120 s (`[claude] poll_seconds`, at least 60). On macOS, Claude Code keeps the token in the login keychain instead of that file: the monitor reads the `Claude Code-credentials` item for `~/.claude`, and `Claude Code-credentials-<hash>` for other folders (first 8 hex digits of SHA-256 of the folder path). Only Pro/Max logins (`claudeAiOauth`) have usage data; API-key logins show no card. Claude Code uses the same endpoint with the same token, so polling too often gets it rate-limited. The last reading is kept in the cache folder (`~/.cache/ai-usage-monitor`, Windows `%LOCALAPPDATA%\ai-usage-monitor`, macOS `~/Library/Caches/ai-usage-monitor`) so a restart shows it at once. The session block is computed from the newest Claude Code log under `~/.claude/projects/`. Only token counts, model and effort are read; conversation content is ignored.
+- **Claude logins of other coding agents (omo, omp)** — usage limits belong to the Claude account, not to the tool, so these logins add tokens to the Claude card instead of new cards. The monitor reads omo's credential file (`[omo] auth`, default `~/.omo/agent/auth.json`; the first unexpired account under `anthropic-subscription.accounts`) and omp's database (`[omp] db`, default `~/.omp/agent/agent.db`, opened read-only; the newest enabled `anthropic` OAuth row). At startup it asks Anthropic's profile endpoint (`/api/oauth/profile`) which account each token belongs to; when that call fails, omp's saved account id is used. A login of the same account as a Claude Code card joins that card; otherwise it gets its own card, named "Claude" when there is no Claude Code card, else "Claude · omo" / "Claude · omp". A card asks its tokens in order (Claude Code, omo, omp) and shows the first answer. Each token has its own backoff, so a 429 on one does not stop the others. When every token fails, an omp token adds the usage omp last saved (`usage_history`, including extra limits such as "7d fable") as a fallback. omo and omp refresh their tokens; the monitor never does. Turn either off with `[omo] enabled = false` / `[omp] enabled = false`. Their file layouts are internal and may change.
+
+  Next to the plan, the Claude card shows the account and where its numbers came from: the account's email, masked (only the first two letters of the name and of the domain, plus the top-level domain: `of…@ex….com`), the login that answered (**CC** = Claude Code, **omo**, **omp**) and how. **live** means fetched now. **cached** means the card's last reading, reused within half the poll interval or kept while all tokens fail; a reading loaded from the cache file at startup shows just "cached". **omp saved** means omp's own last reading. Example: `max · of…@ex….com · omo · live`. The email and, when Claude Code gives no plan, the plan (max or pro) come from the profile endpoint, asked once per card at startup or on its first poll. The email is shown only in this masked form and never logged or stored.
+- **OpenAI** — reads the ChatGPT token from `~/.codex/auth.json` (or `$CODEX_HOME`) and calls the ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) every 60 s. On macOS, when Codex keeps its login in the keychain (`cli_auth_credentials_store = "keyring"` or `"auto"`), the monitor reads the `Codex Auth` item whose account is `cli|<first 16 hex digits of SHA-256 of the Codex folder path>`. If the live call fails, it falls back to the rate limits Codex last wrote into its session logs under `~/.codex/sessions/` and marks the card "as of HH:MM (local)".
 - **GitHub Copilot** — uses the first GitHub login it finds: `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the Copilot CLI entry (`copilot-cli`) in the OS keychain, copilot.vim/lua's `github-copilot/apps.json`, or the `gh` CLI login (`hosts.yml`, or its `gh:github.com` keychain entry). Classic `ghp_` tokens in the environment are skipped because Copilot does not accept them. A GitHub login without a Copilot subscription shows "no Copilot subscription"; set `[copilot] enabled = false` to hide the card. It calls GitHub's internal Copilot usage endpoint (`api.github.com/copilot_internal/user`) every 5 minutes.
 - **Cursor** — uses the `cursor-agent` login (`~/.config/cursor/auth.json`, Windows `%APPDATA%\Cursor\auth.json`, or `$CURSOR_CLI_AUTH_FILE`) or the Cursor app's local database (opened read-only), and calls Cursor's usage summary (`cursor.com/api/usage-summary`) every 5 minutes. Cursor logins expire; when that happens the card turns red until you open Cursor (or run `cursor-agent`) again.
 - **MiniMax** — uses `$MINIMAX_API_KEY` or the key stored by the `mmx` CLI in `~/.mmx/config.json`, and calls the Coding Plan endpoint (`api.minimax.io/v1/api/openplatform/coding_plan/remains`, or `api.minimaxi.com` for the `cn` region) every 120 s.
+- **OpenRouter** — uses `$OPENROUTER_API_KEY` (`[openrouter] api_key_env`) and calls `openrouter.ai/api/v1/key` every 5 minutes. The card shows the dollars the key spent today, this week and this month. These are calendar periods in UTC, as OpenRouter counts them (the week starts on Monday), not rolling 1, 7 and 30 days. Each row's reset time is the end of its period. Without a credit limit there are no bars. With a limit, the period the limit resets on gets a bar for its share of the limit (a limit that never resets adds a "total" row), and the note shows what is left.
 
 The Copilot and Cursor endpoints are internal to those services and may change without notice.
 
@@ -55,18 +59,28 @@ mkdir -p ~/.config/autostart
 cp ~/.local/share/applications/ai-usage-monitor.desktop ~/.config/autostart/
 ```
 
+**macOS:** there is no prebuilt release. Build from source (see *Building from source*), then:
+
+```sh
+mkdir -p ~/.local/bin
+install -m755 target/release/ai-usage-monitor ~/.local/bin/ai-usage-monitor
+```
+
+Run it from a terminal with `ai-usage-monitor`. To start it on login, add it under System Settings → General → Login Items.
+
 ## Configuration
 
 No configuration is needed. To change behaviour, create `config.toml` at:
 
 - Linux: `~/.config/ai-usage-monitor/config.toml`
 - Windows: `%APPDATA%\ai-usage-monitor\config.toml`
+- macOS: `~/Library/Application Support/ai-usage-monitor/config.toml`
 
 Every key is optional (see `config.example.toml`):
 
 ```toml
 always_on_top = false
-order = ["claude", "openai", "copilot", "cursor", "minimax"]
+order = ["claude", "openai", "copilot", "cursor", "minimax", "openrouter"]
 
 [claude]
 enabled = true
@@ -95,6 +109,18 @@ enabled = true
 api_key_env = "MINIMAX_API_KEY"
 # region = "global"      # or "cn"
 models = ["general"]      # add "video" etc. to show more MiniMax quotas
+
+[openrouter]
+enabled = true
+api_key_env = "OPENROUTER_API_KEY"
+
+[omp]                     # omp's Claude login (also off when [claude] is off)
+enabled = true
+db = "~/.omp/agent/agent.db"
+
+[omo]                     # omo's Claude login (also off when [claude] is off)
+enabled = true
+auth = "~/.omo/agent/auth.json"
 ```
 
 On Windows write folder paths with forward slashes (`"D:/other/.claude"`) or in single quotes (`'D:\other\.claude'`); backslashes inside double quotes make the file invalid. An `[[...accounts]]` entry pointing at a folder that was already found automatically just renames it. API keys are never read from this file — only from an environment variable or the CLI's own credential file. Unknown keys are reported in the log and ignored; an invalid file falls back to defaults. Right-click the window for always-on-top, the time format toggle and a shortcut to the config folder.
@@ -106,7 +132,7 @@ On Windows write folder paths with forward slashes (`"D:/other/.claude"`) or in 
 - Logs (enable with `RUST_LOG`) contain only provider names, HTTP status codes and error kinds.
 - All provider requests use HTTPS with a 15 s timeout; responses are capped at 2 MB.
 - Conversation contents are never read for display or sent anywhere.
-- For GitHub Copilot the app reads the `copilot-cli` and `gh:github.com` entries from the OS keychain (Secret Service on Linux, Credential Manager on Windows). A locked keychain is skipped; the app never asks you to unlock it.
+- For GitHub Copilot the app reads the `copilot-cli` and `gh:github.com` entries from the OS keychain (Secret Service on Linux, Credential Manager on Windows, login keychain on macOS). On macOS it also reads Claude Code's `Claude Code-credentials` items and Codex's `Codex Auth` items. A locked keychain is skipped; the app never asks you to unlock it. On macOS it uses `/usr/bin/security`. Claude Code and `gh` store their items with that tool, so no access prompt appears for them. Codex stores its item itself, so macOS may ask once whether `security` may read `Codex Auth`; choose **Always Allow**.
 - For Cursor the app opens Cursor's local settings database read-only and never modifies it.
 
 ## Building from source
@@ -122,6 +148,8 @@ On Linux, install the GUI development packages first (Debian/Ubuntu names):
 ```sh
 sudo apt-get install libxkbcommon-dev libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
 ```
+
+On macOS, install the Xcode Command Line Tools (`xcode-select --install`) and Rust (`brew install rust` or rustup). No other packages are needed.
 
 Run the tests with `cargo test`.
 
