@@ -47,7 +47,8 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             for (index, provider) in providers.into_iter().enumerate() {
                 let ctx = cc.egui_ctx.clone();
-                poller::spawn(provider, index, state.clone(), move || {
+                let tracker = cfg.notifications.tracker();
+                poller::spawn(provider, index, state.clone(), tracker, move || {
                     ctx.request_repaint()
                 });
             }
