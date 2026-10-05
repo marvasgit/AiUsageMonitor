@@ -48,3 +48,7 @@ db = "~/.omp/agent/agent.db"
 [omo]                            # omo's Claude login (also off when [claude] is off)
 enabled = true
 auth = "~/.omo/agent/auth.json"
+
+[notifications]                  # desktop alert when a window first crosses each threshold
+enabled = true
+thresholds = [80, 95]            # percent; alerts again after the window resets

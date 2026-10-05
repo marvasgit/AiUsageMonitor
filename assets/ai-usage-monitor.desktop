@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=AI Usage Monitor
-Comment=Claude, OpenAI and MiniMax subscription usage
+Comment=How much of your AI subscriptions you have used
 Exec=ai-usage-monitor
 Icon=ai-usage-monitor
 Terminal=false

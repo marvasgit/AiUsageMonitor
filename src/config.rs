@@ -21,6 +21,7 @@ pub struct Config {
     pub openrouter: OpenRouterConfig,
     pub omp: OmpConfig,
     pub omo: OmoConfig,
+    pub notifications: NotificationsConfig,
 }
 
 impl Default for Config {
@@ -43,6 +44,7 @@ impl Default for Config {
             openrouter: OpenRouterConfig::default(),
             omp: OmpConfig::default(),
             omo: OmoConfig::default(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -191,6 +193,33 @@ pub struct CursorConfig {
 impl Default for CursorConfig {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+/// Desktop notifications when a rate-limit window crosses one of `thresholds` (percent).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    pub enabled: bool,
+    pub thresholds: Vec<u8>,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            thresholds: vec![80, 95],
+        }
+    }
+}
+
+impl NotificationsConfig {
+    pub fn tracker(&self) -> crate::alerts::Tracker {
+        if self.enabled {
+            crate::alerts::Tracker::new(&self.thresholds)
+        } else {
+            crate::alerts::Tracker::disabled()
+        }
     }
 }
 

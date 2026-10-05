@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/ai-usage-monitor
-          cp target/release/ai-usage-monitor assets/ai-usage-monitor.desktop assets/icon.png config.example.toml README.md LICENSE dist/ai-usage-monitor/
+          cp target/release/ai-usage-monitor install.sh assets/ai-usage-monitor.desktop assets/icon.png config.example.toml README.md LICENSE dist/ai-usage-monitor/
           tar -C dist -czf ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor
       - name: Package Windows
         if: runner.os == 'Windows'

@@ -6,6 +6,8 @@ A small native desktop app for **Windows, Linux and macOS** that shows how much 
 
 One window, one card per provider (and one per account if you use several Claude or Codex logins), each with its rate-limit windows, a usage bar and a reset countdown.
 
+When a window first passes 80 % and again at 95 %, a desktop notification says so, once per window until it resets (thresholds are configurable under `[notifications]`).
+
 ## What it shows
 
 | Provider | Windows | Extra |
@@ -44,20 +46,15 @@ Unlike version 1.0, the monitor no longer installs or modifies a Claude Code `st
 
 **Windows:** download `ai-usage-monitor-windows-x86_64.zip` from the releases page, unzip, and run `ai-usage-monitor.exe`. The executable is not signed, so SmartScreen may warn on first run.
 
-**Linux:** download `ai-usage-monitor-linux-x86_64.tar.gz`, extract it, then:
+**Linux:** download `ai-usage-monitor-linux-x86_64.tar.gz`, extract it, then run the installer from the extracted folder:
 
 ```sh
-install -Dm755 ai-usage-monitor ~/.local/bin/ai-usage-monitor
-install -Dm644 ai-usage-monitor.desktop ~/.local/share/applications/ai-usage-monitor.desktop
-install -Dm644 icon.png ~/.local/share/icons/hicolor/256x256/apps/ai-usage-monitor.png
+./install.sh              # binary in ~/.local/bin, menu entry and icon
+./install.sh --autostart  # the same, and start on login
+./install.sh --uninstall  # remove it again (configuration and cache are kept)
 ```
 
-To start it on login:
-
-```sh
-mkdir -p ~/.config/autostart
-cp ~/.local/share/applications/ai-usage-monitor.desktop ~/.config/autostart/
-```
+Run it again to update. It also works from a source checkout after `cargo build --release`. Start the monitor from the menu rather than from a terminal: a terminal may carry variables such as `CLAUDE_CONFIG_DIR` meant for one CLI session.
 
 **macOS:** there is no prebuilt release. Build from source (see *Building from source*), then:
 
@@ -84,6 +81,7 @@ order = ["claude", "openai", "copilot", "cursor", "minimax", "openrouter"]
 
 [claude]
 enabled = true
+poll_seconds = 120        # minimum 60; the token is shared with Claude Code
 # context_limit = 200000
 # hide = ["personal"]     # account names to hide; "default" = ~/.claude
 # [[claude.accounts]]     # extra account folder (outside home or nested deeper)
@@ -121,6 +119,10 @@ db = "~/.omp/agent/agent.db"
 [omo]                     # omo's Claude login (also off when [claude] is off)
 enabled = true
 auth = "~/.omo/agent/auth.json"
+
+[notifications]           # desktop alert when a window first crosses each threshold
+enabled = true
+thresholds = [80, 95]     # percent
 ```
 
 On Windows write folder paths with forward slashes (`"D:/other/.claude"`) or in single quotes (`'D:\other\.claude'`); backslashes inside double quotes make the file invalid. An `[[...accounts]]` entry pointing at a folder that was already found automatically just renames it. API keys are never read from this file — only from an environment variable or the CLI's own credential file. Unknown keys are reported in the log and ignored; an invalid file falls back to defaults. Right-click the window for always-on-top, the time format toggle and a shortcut to the config folder.
@@ -152,6 +154,10 @@ sudo apt-get install libxkbcommon-dev libgl1-mesa-dev libwayland-dev libx11-dev 
 On macOS, install the Xcode Command Line Tools (`xcode-select --install`) and Rust (`brew install rust` or rustup). No other packages are needed.
 
 Run the tests with `cargo test`.
+
+## Releases
+
+Versions follow [semantic versioning](https://semver.org): bug fixes raise the patch number (2.0.3 → 2.0.4), new features the minor number (2.0.3 → 2.1.0), and changes that break existing configuration the major number. To release, set the version in `Cargo.toml` and at the top of this README, commit, and push a tag `vX.Y.Z`: CI then builds the Linux and Windows packages and publishes them with a `SHA256SUMS` file on the releases page.
 
 ## Adding a provider
 

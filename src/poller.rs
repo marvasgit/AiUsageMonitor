@@ -1,10 +1,11 @@
 //! Background polling: one thread per provider writing into shared state.
 
+use crate::alerts::{Alert, Tracker};
 use crate::model::{ProviderError, ProviderSnapshot, ProviderState};
 use crate::providers::Provider;
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub type SharedState = Arc<RwLock<Vec<ProviderState>>>;
 
@@ -34,17 +35,23 @@ pub fn error_delay(err: &ProviderError, prev: Duration, interval: Duration) -> D
     }
 }
 
-/// Polls once, stores the result at `index`, returns the delay before the next poll.
+/// Polls once, stores the result at `index`, returns the delay before the next poll and
+/// any near-limit alerts the new numbers raise.
 pub fn poll_once(
     provider: &mut dyn Provider,
     index: usize,
     state: &SharedState,
     prev: Duration,
-) -> Duration {
+    tracker: &mut Tracker,
+) -> (Duration, Vec<Alert>) {
     let result = provider.poll();
-    if let Err(e) = &result {
-        log::warn!("{}: {e}", provider.id());
-    }
+    let alerts = match &result {
+        Ok(snap) => tracker.check(provider.display_name(), snap, SystemTime::now()),
+        Err(e) => {
+            log::warn!("{}: {e}", provider.id());
+            Vec::new()
+        }
+    };
     let delay = next_delay(&result, prev, provider.poll_interval());
     let mut guard = state
         .write()
@@ -52,13 +59,14 @@ pub fn poll_once(
     if let Some(slot) = guard.get_mut(index) {
         slot.apply(result);
     }
-    delay
+    (delay, alerts)
 }
 
 pub fn spawn(
     mut provider: Box<dyn Provider>,
     index: usize,
     state: SharedState,
+    mut tracker: Tracker,
     on_update: impl Fn() + Send + 'static,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
@@ -66,8 +74,10 @@ pub fn spawn(
         .spawn(move || {
             let mut delay = provider.poll_interval();
             loop {
-                delay = poll_once(provider.as_mut(), index, &state, delay);
+                let alerts;
+                (delay, alerts) = poll_once(provider.as_mut(), index, &state, delay, &mut tracker);
                 on_update();
+                alerts.iter().for_each(crate::notify::send);
                 std::thread::sleep(delay);
             }
         })
@@ -145,9 +155,13 @@ mod tests {
             Ok(ProviderSnapshot::new(vec![Window::new("5h", 1.0, None)])),
             Err(ProviderError::Network("down".into())),
         ]));
-        assert_eq!(poll_once(&mut p, 0, &state, I), I);
+        let mut t = Tracker::disabled();
+        assert_eq!(poll_once(&mut p, 0, &state, I, &mut t).0, I);
         assert_eq!(state.read().unwrap()[0].status, ProviderStatus::Ok);
-        assert_eq!(poll_once(&mut p, 0, &state, I), Duration::from_secs(120));
+        assert_eq!(
+            poll_once(&mut p, 0, &state, I, &mut t).0,
+            Duration::from_secs(120)
+        );
         let st = state.read().unwrap()[0].clone();
         assert!(matches!(
             st.status,
@@ -160,7 +174,10 @@ mod tests {
     fn poll_once_ignores_out_of_range_index() {
         let state = one_state();
         let mut p = Scripted(VecDeque::from(vec![Ok(ProviderSnapshot::new(vec![]))]));
-        assert_eq!(poll_once(&mut p, 7, &state, I), I);
+        assert_eq!(
+            poll_once(&mut p, 7, &state, I, &mut Tracker::disabled()).0,
+            I
+        );
         assert_eq!(state.read().unwrap()[0].status, ProviderStatus::Pending);
     }
 
@@ -169,9 +186,15 @@ mod tests {
         let state = one_state();
         let (tx, rx) = std::sync::mpsc::channel();
         let p = Scripted(VecDeque::from(vec![Ok(ProviderSnapshot::new(vec![]))]));
-        let _handle = spawn(Box::new(p), 0, state.clone(), move || {
-            let _ = tx.send(());
-        });
+        let _handle = spawn(
+            Box::new(p),
+            0,
+            state.clone(),
+            Tracker::disabled(),
+            move || {
+                let _ = tx.send(());
+            },
+        );
         rx.recv_timeout(Duration::from_secs(5))
             .expect("no update notification");
         assert_eq!(state.read().unwrap()[0].status, ProviderStatus::Ok);
