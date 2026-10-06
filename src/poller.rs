@@ -4,7 +4,7 @@ use crate::model::{ProviderError, ProviderSnapshot, ProviderState};
 use crate::providers::Provider;
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub type SharedState = Arc<RwLock<Vec<ProviderState>>>;
 
@@ -51,6 +51,7 @@ pub fn poll_once(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(slot) = guard.get_mut(index) {
         slot.apply(result);
+        slot.next_poll = Some(SystemTime::now() + delay);
     }
     delay
 }

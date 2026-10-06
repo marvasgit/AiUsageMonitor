@@ -102,7 +102,7 @@ fn session_block(ui: &mut egui::Ui, s: &Session) {
     ui.label(RichText::new(tokens).monospace().color(theme::MUTED));
 }
 
-fn header(ui: &mut egui::Ui, state: &ProviderState) {
+fn header(ui: &mut egui::Ui, state: &ProviderState, now: SystemTime) {
     let snap = state.last_ok.as_ref();
     ui.horizontal(|ui| {
         let (dot, _) = ui.allocate_exact_size(Vec2::splat(DOT_RADIUS * 2.0 + 2.0), Sense::hover());
@@ -129,6 +129,11 @@ fn header(ui: &mut egui::Ui, state: &ProviderState) {
                 None => session.model.clone(),
             };
             ui.label(RichText::new(model).monospace());
+        }
+        if let Some(next) = state.next_poll {
+            let secs = next.duration_since(now).map_or(0, |d| d.as_secs());
+            ui.label(RichText::new("⏱").small().color(theme::MUTED))
+                .on_hover_text(format!("Next check in {secs} s"));
         }
     });
     let mut notes = Vec::new();
@@ -157,7 +162,7 @@ pub fn show(
         .inner_margin(10.0)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            header(ui, state);
+            header(ui, state, now);
             match &state.last_ok {
                 Some(snap) => {
                     if let Some(session) = &snap.session {
