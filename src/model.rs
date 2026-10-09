@@ -133,6 +133,8 @@ pub struct ProviderState {
     pub name: String,
     pub status: ProviderStatus,
     pub last_ok: Option<ProviderSnapshot>,
+    /// When the poller will check this provider next; `None` before the first poll.
+    pub next_poll: Option<SystemTime>,
 }
 
 impl ProviderState {
@@ -142,6 +144,7 @@ impl ProviderState {
             name: name.into(),
             status: ProviderStatus::Pending,
             last_ok: None,
+            next_poll: None,
         }
     }
 
