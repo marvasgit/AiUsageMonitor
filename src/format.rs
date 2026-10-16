@@ -13,9 +13,14 @@ pub enum Level {
 }
 
 pub fn pct_level(pct: f64) -> Level {
-    if pct >= CRIT_PCT {
+    level_at(pct, WARN_PCT, CRIT_PCT)
+}
+
+/// Level of `pct` against custom `warn` / `crit` percentages.
+pub fn level_at(pct: f64, warn: f64, crit: f64) -> Level {
+    if pct >= crit {
         Level::Crit
-    } else if pct >= WARN_PCT {
+    } else if pct >= warn {
         Level::Warn
     } else {
         Level::Ok
@@ -147,6 +152,9 @@ mod tests {
         assert_eq!(pct_level(60.0), Level::Warn);
         assert_eq!(pct_level(84.9), Level::Warn);
         assert_eq!(pct_level(85.0), Level::Crit);
+        assert_eq!(level_at(49.0, 50.0, 70.0), Level::Ok);
+        assert_eq!(level_at(50.0, 50.0, 70.0), Level::Warn);
+        assert_eq!(level_at(70.0, 50.0, 70.0), Level::Crit);
     }
 
     #[test]

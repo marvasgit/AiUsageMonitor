@@ -1,7 +1,8 @@
 //! One provider card: header, optional session block, rate-limit windows.
 
 use super::theme;
-use crate::format::{fmt_absolute, fmt_countdown, fmt_tokens, pct_level};
+use crate::config::ContextConfig;
+use crate::format::{fmt_absolute, fmt_countdown, fmt_tokens, level_at, pct_level, Level};
 use crate::model::{ProviderState, ProviderStatus, Session, Window};
 use egui::{Color32, RichText, Sense, Vec2};
 use serde::{Deserialize, Serialize};
@@ -28,13 +29,13 @@ fn status_color(status: &ProviderStatus) -> Color32 {
     }
 }
 
-fn bar(ui: &mut egui::Ui, pct: f64) {
+fn bar(ui: &mut egui::Ui, pct: f64, level: Level) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(BAR_WIDTH, BAR_HEIGHT), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, theme::TRACK);
     let mut fill = rect;
     fill.set_width(rect.width() * (pct.clamp(0.0, 100.0) / 100.0) as f32);
-    painter.rect_filled(fill, 2.0, theme::level_color(pct_level(pct)));
+    painter.rect_filled(fill, 2.0, theme::level_color(level));
 }
 
 fn row_label(ui: &mut egui::Ui, text: &str) {
@@ -62,7 +63,7 @@ fn window_row(
     ui.horizontal(|ui| {
         row_label(ui, &window.label);
         if window.bar {
-            bar(ui, window.used_pct);
+            bar(ui, window.used_pct, pct_level(window.used_pct));
         } else {
             ui.allocate_exact_size(Vec2::new(BAR_WIDTH, BAR_HEIGHT), Sense::hover());
         }
@@ -79,10 +80,15 @@ fn window_row(
     .inner
 }
 
-fn session_block(ui: &mut egui::Ui, s: &Session) {
+fn session_block(ui: &mut egui::Ui, s: &Session, levels: &ContextConfig) {
     ui.horizontal(|ui| {
         row_label(ui, "ctx");
-        bar(ui, s.context_pct());
+        let pct = s.context_pct();
+        bar(
+            ui,
+            pct,
+            level_at(pct, f64::from(levels.warn), f64::from(levels.crit)),
+        );
         ui.monospace(format!("{:>5.1}%", s.context_pct()));
     });
     let context = format!(
@@ -125,10 +131,11 @@ fn header(ui: &mut egui::Ui, state: &ProviderState, now: SystemTime) {
         }
         if let Some(session) = snap.and_then(|s| s.session.as_ref()) {
             let model = match &session.effort {
-                Some(effort) => format!("{} ({effort})", session.model),
-                None => session.model.clone(),
+                Some(effort) => format!("{} · {} ({effort})", session.source, session.model),
+                None => format!("{} · {}", session.source, session.model),
             };
-            ui.label(RichText::new(model).monospace());
+            ui.label(RichText::new(model).monospace())
+                .on_hover_text("Newest session (CC = Claude Code, omo) · model (effort)");
         }
         if let Some(next) = state.next_poll {
             let secs = next.duration_since(now).map_or(0, |d| d.as_secs());
@@ -154,6 +161,7 @@ pub fn show(
     state: &ProviderState,
     now: SystemTime,
     mode: TimeMode,
+    context: &ContextConfig,
 ) -> Vec<egui::Response> {
     let mut resets = Vec::new();
     egui::Frame::NONE
@@ -166,7 +174,7 @@ pub fn show(
             match &state.last_ok {
                 Some(snap) => {
                     if let Some(session) = &snap.session {
-                        session_block(ui, session);
+                        session_block(ui, session, context);
                     }
                     for window in &snap.windows {
                         resets.push(window_row(ui, window, now, mode));

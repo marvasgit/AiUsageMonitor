@@ -177,12 +177,18 @@ pub fn merge_agent_logins(
     }
     for login in logins {
         let (account, profile) = login.creds.lookup(api_base);
+        // omo keeps its session logs next to its credential file.
+        let omo_sessions = match &login.creds {
+            Creds::Omo(auth) => auth.parent().map(|dir| dir.join("sessions")),
+            Creds::ClaudeDir(_) | Creds::Omp(_) => None,
+        };
         let same = account
             .as_ref()
             .and_then(|a| accounts.iter().position(|c| c.as_ref() == Some(a)));
         if let Some(i) = same {
             let card = &mut cards[i];
             card.sources.push(Source::new(login.creds, card.interval));
+            card.omo_sessions = card.omo_sessions.take().or(omo_sessions);
             continue;
         }
         let (id, name) = if cards.iter().any(|c| c.id == "claude") {
@@ -192,6 +198,7 @@ pub fn merge_agent_logins(
         };
         let mut card = Claude::new(cfg, id, name, login.creds, None);
         card.api_base = api_base.to_string();
+        card.omo_sessions = omo_sessions;
         card.profile = profile;
         card.profile_tried = true;
         cards.push(card);

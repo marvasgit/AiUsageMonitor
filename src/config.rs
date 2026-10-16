@@ -22,6 +22,7 @@ pub struct Config {
     pub omp: OmpConfig,
     pub omo: OmoConfig,
     pub notifications: NotificationsConfig,
+    pub context: ContextConfig,
 }
 
 impl Default for Config {
@@ -45,6 +46,7 @@ impl Default for Config {
             omp: OmpConfig::default(),
             omo: OmoConfig::default(),
             notifications: NotificationsConfig::default(),
+            context: ContextConfig::default(),
         }
     }
 }
@@ -214,11 +216,32 @@ impl Default for NotificationsConfig {
 }
 
 impl NotificationsConfig {
-    pub fn tracker(&self) -> crate::alerts::Tracker {
+    /// Alerts for rate-limit windows and for the session's `context` thresholds.
+    pub fn tracker(&self, context: &ContextConfig) -> crate::alerts::Tracker {
         if self.enabled {
-            crate::alerts::Tracker::new(&self.thresholds)
+            crate::alerts::Tracker::new(&self.thresholds).with_context(&context.notify)
         } else {
             crate::alerts::Tracker::disabled()
+        }
+    }
+}
+
+/// The session's context-window bar (`ctx`): when it turns amber (`warn`) and red
+/// (`crit`), and the percentages that raise a desktop alert (`notify`, empty = none).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ContextConfig {
+    pub warn: u8,
+    pub crit: u8,
+    pub notify: Vec<u8>,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            warn: 60,
+            crit: 85,
+            notify: vec![80, 95],
         }
     }
 }
@@ -316,6 +339,22 @@ mod tests {
         assert!(cfg.openai.enabled);
         assert_eq!(cfg.minimax.region.as_deref(), Some("cn"));
         assert_eq!(cfg.minimax.models, vec!["general"]);
+    }
+
+    #[test]
+    fn context_thresholds_default_and_parse() {
+        assert_eq!(
+            parse("").unwrap().0.context,
+            ContextConfig {
+                warn: 60,
+                crit: 85,
+                notify: vec![80, 95]
+            }
+        );
+        let (cfg, ignored) = parse("[context]\nwarn = 50\nnotify = []\n").unwrap();
+        assert!(ignored.is_empty());
+        assert_eq!((cfg.context.warn, cfg.context.crit), (50, 85));
+        assert!(cfg.context.notify.is_empty());
     }
 
     #[test]

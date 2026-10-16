@@ -15,7 +15,7 @@ pub use agents::{
 };
 pub use creds::{parse_credentials, read_credentials};
 pub use profile::mask_email;
-pub use session::{context_limit, scan_session};
+pub use session::{context_limit, scan_omo_session, scan_session};
 
 use super::jsonl;
 use super::usage_cache;
@@ -84,10 +84,13 @@ pub struct Claude {
     sources: Vec<Source>,
     /// Claude Code folder whose `projects/` logs feed the session block.
     sessions: Option<PathBuf>,
+    /// omo's `sessions/` folder, when omo's login belongs to this card's account.
+    omo_sessions: Option<PathBuf>,
     api_base: String,
     limit_override: Option<u64>,
     interval: Duration,
     cache: Option<SessionCache>,
+    omo_cache: Option<SessionCache>,
     last_usage: Option<(Vec<Window>, SystemTime)>,
     usage_file: Option<PathBuf>,
     plan: Option<String>,
@@ -131,10 +134,12 @@ impl Claude {
             name,
             sources: vec![Source::new(creds, interval)],
             sessions,
+            omo_sessions: None,
             api_base: API_BASE.to_string(),
             limit_override: cfg.claude.context_limit,
             interval,
             cache: None,
+            omo_cache: None,
             last_usage: None,
             usage_file: None,
             plan: None,
@@ -248,24 +253,54 @@ impl Claude {
         }
     }
 
-    /// Rescans the newest session log only when its path, size or mtime changed.
+    /// The card's current session: Claude Code's or omo's, whichever log was written last.
     fn current_session(&mut self) -> Option<Session> {
-        let dir = self.sessions.as_ref()?;
-        let newest = jsonl::newest_files(&dir.join("projects"), "jsonl", 1).pop()?;
-        if let Some(cache) = &self.cache {
-            if cache.file == newest {
-                return cache.session.clone();
-            }
+        let limit = self.limit_override;
+        let cc = self
+            .sessions
+            .as_ref()
+            .and_then(|dir| jsonl::newest_files(&dir.join("projects"), "jsonl", 1).pop())
+            .and_then(|f| cached_scan(&mut self.cache, f, |t| scan_session(t, limit)));
+        let omo = self
+            .omo_sessions
+            .as_deref()
+            .and_then(newest_omo_log)
+            .and_then(|f| cached_scan(&mut self.omo_cache, f, |t| scan_omo_session(t, limit)));
+        match (cc, omo) {
+            (Some(cc), Some(omo)) if omo.0 > cc.0 => Some(omo.1),
+            (Some(cc), _) => Some(cc.1),
+            (None, omo) => omo.map(|o| o.1),
         }
-        let session = std::fs::read_to_string(&newest.path)
-            .ok()
-            .and_then(|text| scan_session(&text, self.limit_override));
-        self.cache = Some(SessionCache {
-            file: newest,
-            session: session.clone(),
-        });
-        session
     }
+}
+
+/// Rescans a session log only when its path, size or mtime changed. Returns the log's
+/// mtime with its session.
+fn cached_scan(
+    cache: &mut Option<SessionCache>,
+    file: jsonl::FileInfo,
+    scan: impl Fn(&str) -> Option<Session>,
+) -> Option<(SystemTime, Session)> {
+    let modified = file.modified;
+    if let Some(c) = cache.as_ref().filter(|c| c.file == file) {
+        return c.session.clone().map(|s| (modified, s));
+    }
+    let session = std::fs::read_to_string(&file.path)
+        .ok()
+        .and_then(|text| scan(&text));
+    *cache = Some(SessionCache {
+        file,
+        session: session.clone(),
+    });
+    session.map(|s| (modified, s))
+}
+
+/// Newest omo session log: `sessions/<project>/<session>.jsonl`. Deeper `.jsonl` files
+/// (extension state such as goal histories) are not sessions.
+fn newest_omo_log(dir: &Path) -> Option<jsonl::FileInfo> {
+    jsonl::newest_files(dir, "jsonl", usize::MAX)
+        .into_iter()
+        .find(|f| f.path.parent().and_then(Path::parent) == Some(dir))
 }
 
 fn fetch_usage(api_base: &str, token: &str) -> Result<Vec<Window>, ProviderError> {
@@ -565,6 +600,43 @@ mod tests {
         );
         let default = Claude::detect(&Config::default(), &Account::new("", dir)).unwrap();
         assert_eq!((default.id(), default.display_name()), ("claude", "Claude"));
+    }
+
+    #[test]
+    fn poll_shows_omo_session_when_newer_than_claude_code() {
+        let home = home_with_creds();
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/api/oauth/usage");
+            then.status(200).body(USAGE);
+        });
+        let mut p = Claude::detect(
+            &Config::default(),
+            &Account::new("", home.path().join(".claude")),
+        )
+        .unwrap()
+        .with_api_base(server.base_url());
+        let sessions = home.path().join(".omo/agent/sessions");
+        p.omo_sessions = Some(sessions.clone());
+        let write = |rel: &str, text: &str, mtime: i64| {
+            let f = sessions.join(rel);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, text).unwrap();
+            filetime::set_file_mtime(&f, filetime::FileTime::from_unix_time(mtime, 0)).unwrap();
+        };
+        let line = r#"{"type":"message","message":{"role":"assistant","provider":"anthropic-subscription","model":"claude-omo","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4}}}"#;
+        write("--proj--/s.jsonl", line, 1);
+        write("--proj--/extensions/goal/g.jsonl", "{}", 4_000_000_001);
+        assert_eq!(
+            p.poll().unwrap().session.unwrap().source,
+            "CC",
+            "CC log is newer"
+        );
+
+        write("--proj--/s.jsonl", line, 4_000_000_000);
+        let s = p.poll().unwrap().session.unwrap();
+        assert_eq!((s.source, s.model.as_str()), ("omo", "claude-omo"));
+        assert_eq!(s.context_tokens, 1 + 3 + 4);
     }
 
     #[test]

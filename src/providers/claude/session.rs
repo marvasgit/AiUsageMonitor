@@ -1,4 +1,4 @@
-//! Claude Code session logs: the current session's model, tokens and context use.
+//! Claude Code and omo session logs: the current session's model, tokens and context use.
 
 use super::jsonl::FileInfo;
 use crate::model::Session;
@@ -42,9 +42,9 @@ struct LogUsage {
     cache_read_input_tokens: u64,
 }
 
-/// Aggregates a Claude Code session log; `None` when it has no assistant usage.
-pub fn scan_session(text: &str, limit_override: Option<u64>) -> Option<Session> {
-    let mut s = Session {
+fn empty_session(source: &'static str) -> Session {
+    Session {
+        source,
         model: String::new(),
         effort: None,
         input: 0,
@@ -54,7 +54,27 @@ pub fn scan_session(text: &str, limit_override: Option<u64>) -> Option<Session> 
         requests: 0,
         context_tokens: 0,
         context_limit: 0,
+    }
+}
+
+/// Sets the context window once all requests are counted; `None` when there were none.
+fn finish(mut s: Session, limit_override: Option<u64>) -> Option<Session> {
+    if s.requests == 0 {
+        return None;
+    }
+    // Model ids do not always carry "[1m]"; a context above the default proves the long window.
+    let limit = context_limit(&s.model, limit_override);
+    s.context_limit = if limit_override.is_none() && s.context_tokens > limit {
+        LONG_CONTEXT
+    } else {
+        limit
     };
+    Some(s)
+}
+
+/// Aggregates a Claude Code session log; `None` when it has no assistant usage.
+pub fn scan_session(text: &str, limit_override: Option<u64>) -> Option<Session> {
+    let mut s = empty_session("CC");
     let mut seen = std::collections::HashSet::new();
     for line in text.lines().filter(|l| l.contains("\"assistant\"")) {
         let Ok(parsed) = serde_json::from_str::<LogLine>(line) else {
@@ -87,17 +107,70 @@ pub fn scan_session(text: &str, limit_override: Option<u64>) -> Option<Session> 
             s.effort = parsed.effort;
         }
     }
-    if s.requests == 0 {
-        return None;
+    finish(s, limit_override)
+}
+
+#[derive(Deserialize)]
+struct OmoLine {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    message: Option<OmoMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OmoMessage {
+    role: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    thinking_level: Option<String>,
+    usage: Option<OmoUsage>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct OmoUsage {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+/// omo's provider id for its Claude subscription login.
+const OMO_CLAUDE_PROVIDER: &str = "anthropic-subscription";
+
+/// Aggregates the Claude subscription replies of an omo session log; `None` when it has
+/// none (e.g. a session on another provider).
+pub fn scan_omo_session(text: &str, limit_override: Option<u64>) -> Option<Session> {
+    let mut s = empty_session("omo");
+    for line in text.lines().filter(|l| l.contains(OMO_CLAUDE_PROVIDER)) {
+        let Ok(parsed) = serde_json::from_str::<OmoLine>(line) else {
+            continue;
+        };
+        if parsed.kind.as_deref() != Some("message") {
+            continue;
+        }
+        let Some(msg) = parsed.message else { continue };
+        if msg.role.as_deref() != Some("assistant")
+            || msg.provider.as_deref() != Some(OMO_CLAUDE_PROVIDER)
+        {
+            continue;
+        }
+        let Some(u) = msg.usage else { continue };
+        s.input += u.input;
+        s.output += u.output;
+        s.cache_create += u.cache_write;
+        s.cache_read += u.cache_read;
+        s.requests += 1;
+        s.context_tokens = u.input + u.cache_write + u.cache_read;
+        if let Some(model) = msg.model.filter(|m| !m.is_empty()) {
+            s.model = model;
+        }
+        if msg.thinking_level.is_some() {
+            s.effort = msg.thinking_level;
+        }
     }
-    // Model ids do not always carry "[1m]"; a context above the default proves the long window.
-    let limit = context_limit(&s.model, limit_override);
-    s.context_limit = if limit_override.is_none() && s.context_tokens > limit {
-        LONG_CONTEXT
-    } else {
-        limit
-    };
-    Some(s)
+    finish(s, limit_override)
 }
 
 pub(super) struct SessionCache {
@@ -164,6 +237,35 @@ mod tests {
         let s = scan_session(line, None).unwrap();
         assert_eq!(s.context_limit, 1_000_000);
         assert!(s.context_pct() < 100.0);
+    }
+
+    #[test]
+    fn scan_omo_session_counts_only_claude_subscription_replies() {
+        let text = [
+            r#"{"type":"session","version":3,"id":"x"}"#,
+            r#"{"type":"message","message":{"role":"user","content":"anthropic-subscription"}}"#,
+            r#"{"type":"message","message":{"role":"assistant","provider":"anthropic-subscription","model":"claude-opus-5-5","usage":{"input":4,"output":154,"cacheRead":45920,"cacheWrite":1982,"totalTokens":48060},"thinkingLevel":"medium"}}"#,
+            r#"{"type":"message","message":{"role":"assistant","provider":"openai","model":"gpt-6","usage":{"input":9,"output":9,"cacheRead":9,"cacheWrite":9}}}"#,
+            r#"{"type":"message","message":{"role":"assistant","provider":"anthropic-subscription","model":"claude-opus-5-5","usage":{"input":2,"output":580,"cacheRead":47902,"cacheWrite":643},"thinkingLevel":"high"}}"#,
+        ]
+        .join("\n");
+        let s = scan_omo_session(&text, None).unwrap();
+        assert_eq!(s.source, "omo");
+        assert_eq!(s.requests, 2);
+        assert_eq!(
+            (s.input, s.output, s.cache_create, s.cache_read),
+            (6, 734, 2_625, 93_822)
+        );
+        assert_eq!(s.context_tokens, 2 + 643 + 47_902);
+        assert_eq!(s.context_limit, 200_000);
+        assert_eq!(s.model, "claude-opus-5-5");
+        assert_eq!(s.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn scan_omo_session_without_claude_replies_is_none() {
+        let other = r#"{"type":"message","message":{"role":"assistant","provider":"openai","usage":{"input":1}}}"#;
+        assert!(scan_omo_session(other, None).is_none());
     }
 
     #[test]

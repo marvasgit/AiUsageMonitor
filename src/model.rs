@@ -72,6 +72,8 @@ impl Window {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
+    /// Agent whose log this is: "CC" (Claude Code) or "omo".
+    pub source: &'static str,
     pub model: String,
     pub effort: Option<String>,
     pub input: u64,
@@ -167,6 +169,7 @@ mod tests {
 
     fn sample_session() -> Session {
         Session {
+            source: "CC",
             model: "m".into(),
             effort: None,
             input: 0,

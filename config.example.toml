@@ -52,3 +52,8 @@ auth = "~/.omo/agent/auth.json"
 [notifications]                  # desktop alert when a window first crosses each threshold
 enabled = true
 thresholds = [80, 95]            # percent; alerts again after the window resets
+
+[context]                        # the ctx bar of the current Claude Code / omo session
+warn = 60                        # percent of the context window: bar turns amber
+crit = 85                        # bar turns red
+notify = [80, 95]                # desktop alert when first crossed ([] = none; also off with [notifications] enabled = false)

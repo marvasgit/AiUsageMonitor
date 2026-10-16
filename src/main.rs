@@ -47,7 +47,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             for (index, provider) in providers.into_iter().enumerate() {
                 let ctx = cc.egui_ctx.clone();
-                let tracker = cfg.notifications.tracker();
+                let tracker = cfg.notifications.tracker(&cfg.context);
                 poller::spawn(provider, index, state.clone(), tracker, move || {
                     ctx.request_repaint()
                 });
@@ -57,6 +57,7 @@ fn main() -> eframe::Result {
                 state,
                 cfg.always_on_top,
                 paths.config_dir.clone(),
+                cfg.context.clone(),
             )))
         }),
     )

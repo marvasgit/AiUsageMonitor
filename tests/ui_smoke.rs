@@ -1,3 +1,4 @@
+use aum::config::ContextConfig;
 use aum::model::{ProviderError, ProviderSnapshot, ProviderState, Session, Window};
 use aum::ui::app::{draw_body, draw_with_menu};
 use aum::ui::card::TimeMode;
@@ -15,6 +16,7 @@ fn states() -> Vec<ProviderState> {
     snap.plan = Some("max".into());
     snap.source = Some("omo · live".into());
     snap.session = Some(Session {
+        source: "omo",
         model: "claude-sonnet-5".into(),
         effort: Some("medium".into()),
         input: 180,
@@ -41,7 +43,13 @@ fn states() -> Vec<ProviderState> {
 fn renders_all_provider_cards() {
     let states = states();
     let mut harness = Harness::new_ui(|ui| {
-        draw_body(ui, &states, SystemTime::now(), TimeMode::Countdown);
+        draw_body(
+            ui,
+            &states,
+            SystemTime::now(),
+            TimeMode::Countdown,
+            &ContextConfig::default(),
+        );
     });
     harness.run();
     harness.get_by_label_contains("CLAUDE");
@@ -57,7 +65,13 @@ fn renders_all_provider_cards() {
 #[test]
 fn renders_empty_state_message() {
     let mut harness = Harness::new_ui(|ui| {
-        draw_body(ui, &[], SystemTime::now(), TimeMode::Absolute);
+        draw_body(
+            ui,
+            &[],
+            SystemTime::now(),
+            TimeMode::Absolute,
+            &ContextConfig::default(),
+        );
     });
     harness.run();
     harness.get_by_label_contains("No providers detected");
@@ -69,9 +83,16 @@ fn right_click_opens_menu(target: &str) {
     let states = states();
     let mut harness = Harness::new_ui(|ui| {
         aum::ui::theme::apply(ui.ctx());
-        draw_with_menu(ui, &states, SystemTime::now(), TimeMode::Countdown, |ui| {
-            ui.label("MENU-OPEN");
-        });
+        draw_with_menu(
+            ui,
+            &states,
+            SystemTime::now(),
+            TimeMode::Countdown,
+            &ContextConfig::default(),
+            |ui| {
+                ui.label("MENU-OPEN");
+            },
+        );
     });
     harness.run();
     harness.get_by_label(target).click_secondary();
@@ -104,7 +125,13 @@ fn renders_one_card_per_account() {
     )])));
     let states = vec![first, second];
     let mut harness = Harness::new_ui(|ui| {
-        draw_body(ui, &states, SystemTime::now(), TimeMode::Countdown);
+        draw_body(
+            ui,
+            &states,
+            SystemTime::now(),
+            TimeMode::Countdown,
+            &ContextConfig::default(),
+        );
     });
     harness.run();
     harness.get_by_label("CLAUDE");

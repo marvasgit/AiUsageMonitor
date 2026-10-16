@@ -12,13 +12,13 @@ When a window first passes 80 % and again at 95 %, a desktop notification says s
 
 | Provider | Windows | Extra |
 |---|---|---|
-| Claude | 5-hour, 7-day | Current Claude Code session: model, effort, input/output/cache tokens, context-window usage |
+| Claude | 5-hour, 7-day | Current Claude Code or omo session (whichever was active last, labelled CC / omo): model, effort, input/output/cache tokens, context-window usage |
 | OpenAI | 5-hour, weekly | Plan (e.g. `plus`) |
 | GitHub Copilot | Monthly Premium requests or AI credits; Chat and Completions when limited | Plan |
 | Cursor | Plan and API usage of the billing cycle | Plan, on-demand spend |
 | MiniMax | Interval (5-hour), weekly | Plan |
 
-Bars turn amber at 60 % and red at 85 %. Click a reset time to switch between a countdown and the local reset time. A coloured dot next to each provider shows its status: green (ok), grey (loading), amber (network or unexpected response), red (credentials missing or rejected). The error text is shown under the provider name.
+Bars turn amber at 60 % and red at 85 %; the `ctx` bar uses `[context] warn` / `crit` (same defaults). When the session's context first passes `[context] notify` (80 % and 95 % by default) a desktop notification says so; it re-arms once the context drops below the lowest of them, e.g. after compacting or starting a new session. Click a reset time to switch between a countdown and the local reset time. A coloured dot next to each provider shows its status: green (ok), grey (loading), amber (network or unexpected response), red (credentials missing or rejected). The error text is shown under the provider name.
 
 ## How it works
 
@@ -123,6 +123,11 @@ auth = "~/.omo/agent/auth.json"
 [notifications]           # desktop alert when a window first crosses each threshold
 enabled = true
 thresholds = [80, 95]     # percent
+
+[context]                 # ctx bar of the current Claude Code / omo session
+warn = 60                 # percent of the context window: bar turns amber
+crit = 85                 # bar turns red
+notify = [80, 95]         # desktop alert when first crossed; [] = none
 ```
 
 On Windows write folder paths with forward slashes (`"D:/other/.claude"`) or in single quotes (`'D:\other\.claude'`); backslashes inside double quotes make the file invalid. An `[[...accounts]]` entry pointing at a folder that was already found automatically just renames it. API keys are never read from this file — only from an environment variable or the CLI's own credential file. Unknown keys are reported in the log and ignored; an invalid file falls back to defaults. Right-click the window for always-on-top, the time format toggle and a shortcut to the config folder.

@@ -2,6 +2,7 @@
 
 use super::card::{self, TimeMode};
 use super::theme;
+use crate::config::ContextConfig;
 use crate::model::ProviderState;
 use crate::poller::SharedState;
 use egui::{RichText, Sense, ViewportCommand, WindowLevel};
@@ -21,6 +22,7 @@ pub fn draw_body(
     states: &[ProviderState],
     now: SystemTime,
     mode: TimeMode,
+    context: &ContextConfig,
 ) -> Vec<egui::Response> {
     if states.is_empty() {
         ui.label(RichText::new(NO_PROVIDERS).color(theme::MUTED));
@@ -28,7 +30,7 @@ pub fn draw_body(
     }
     let mut resets = Vec::new();
     for state in states {
-        resets.extend(card::show(ui, state, now, mode));
+        resets.extend(card::show(ui, state, now, mode, context));
         ui.add_space(CARD_GAP);
     }
     resets
@@ -40,10 +42,11 @@ pub fn draw_with_menu(
     states: &[ProviderState],
     now: SystemTime,
     mode: TimeMode,
+    context: &ContextConfig,
     mut menu: impl FnMut(&mut egui::Ui),
 ) -> bool {
     let background = ui.interact(ui.max_rect(), egui::Id::new("background"), Sense::click());
-    let resets = draw_body(ui, states, now, mode);
+    let resets = draw_body(ui, states, now, mode, context);
     // Reset labels sense clicks, so they win the hit test: give them the menu too.
     for response in resets.iter().chain(std::iter::once(&background)) {
         response.context_menu(|ui| menu(ui));
@@ -56,6 +59,7 @@ pub struct MonitorApp {
     time_mode: TimeMode,
     always_on_top: bool,
     config_dir: PathBuf,
+    context: ContextConfig,
     last_height: f32,
 }
 
@@ -65,6 +69,7 @@ impl MonitorApp {
         state: SharedState,
         always_on_top: bool,
         config_dir: PathBuf,
+        context: ContextConfig,
     ) -> Self {
         theme::apply(&cc.egui_ctx);
         let time_mode = cc
@@ -84,6 +89,7 @@ impl MonitorApp {
             time_mode,
             always_on_top,
             config_dir,
+            context,
             last_height: 0.0,
         }
     }
@@ -157,7 +163,8 @@ impl eframe::App for MonitorApp {
         let inner = egui::Frame::central_panel(ui.style())
             .fill(theme::BG)
             .show(ui, |ui| {
-                draw_with_menu(ui, &states, SystemTime::now(), mode, |ui| {
+                let context = self.context.clone();
+                draw_with_menu(ui, &states, SystemTime::now(), mode, &context, |ui| {
                     self.context_menu(ui)
                 })
             });
