@@ -1,5 +1,7 @@
 //! OpenAI ChatGPT plan via Codex CLI: live usage endpoint + local session logs.
 
+mod agents;
+
 use super::jsonl;
 use super::{read_secret_file, Provider, ProviderError};
 use crate::accounts::Account;
@@ -8,6 +10,7 @@ use crate::config::Config;
 use crate::format::{from_unix_secs, parse_rfc3339, window_label_from_minutes};
 use crate::http;
 use crate::model::{ProviderSnapshot, Window};
+use agents::{Credentials, Source};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -230,7 +233,8 @@ pub fn merge(
 pub struct OpenAi {
     id: String,
     name: String,
-    codex_home: PathBuf,
+    codex_home: Option<PathBuf>,
+    sources: Vec<Source>,
     api_base: String,
     live_poll: bool,
     backoff: Backoff,
@@ -242,12 +246,16 @@ impl OpenAi {
             return None;
         }
         let auth = read_auth(&account.dir)?;
-        parse_auth(&auth)?;
+        let (_, account_id) = parse_auth(&auth)?;
         let (id, name) = account.identity("openai", "OpenAI");
         Some(Self {
             id,
             name,
-            codex_home: account.dir.clone(),
+            codex_home: Some(account.dir.clone()),
+            sources: vec![Source {
+                credentials: Credentials::Codex(account.dir.clone()),
+                account: account_id,
+            }],
             api_base: API_BASE.to_string(),
             live_poll: cfg.openai.live_poll,
             backoff: Backoff::new(POLL_INTERVAL),
@@ -260,15 +268,81 @@ impl OpenAi {
     }
 }
 
-fn poll_live(codex_home: &Path, api_base: &str) -> Result<LiveLimits, ProviderError> {
-    let auth = read_auth(codex_home).ok_or(ProviderError::NoCredentials)?;
-    let (token, account) = parse_auth(&auth).ok_or(ProviderError::NoCredentials)?;
-    let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
+/// Merge agent tokens into the card for their ChatGPT account, keeping other accounts separate.
+pub fn merge_agent_logins(
+    cfg: &Config,
+    paths: &crate::paths::Paths,
+    mut cards: Vec<OpenAi>,
+) -> Vec<OpenAi> {
+    if !cfg.openai.enabled {
+        return cards;
+    }
+    for (enabled, name, credentials) in [
+        (
+            cfg.omo.enabled,
+            "omo",
+            Credentials::Omo(crate::accounts::expand_home(&cfg.omo.auth, &paths.home)),
+        ),
+        (
+            cfg.omp.enabled,
+            "omp",
+            Credentials::Omp(crate::accounts::expand_home(&cfg.omp.db, &paths.home)),
+        ),
+    ] {
+        if !enabled {
+            continue;
+        }
+        for (_, account) in credentials.logins() {
+            let same = account.as_ref().and_then(|id| {
+                cards
+                    .iter()
+                    .position(|card| card.sources.iter().any(|s| s.account.as_ref() == Some(id)))
+            });
+            let source = Source {
+                credentials: credentials.clone(),
+                account,
+            };
+            if let Some(i) = same {
+                cards[i].sources.push(source);
+            } else {
+                let alias = if cards.iter().any(|c| c.id == "openai") {
+                    let mut alias = name.to_owned();
+                    let mut suffix = 2;
+                    while cards.iter().any(|c| c.id == format!("openai:{alias}")) {
+                        alias = format!("{name}-{suffix}");
+                        suffix += 1;
+                    }
+                    alias
+                } else {
+                    String::new()
+                };
+                let (id, name) = Account::new(alias, "").identity("openai", "OpenAI");
+                cards.push(OpenAi {
+                    id,
+                    name,
+                    codex_home: None,
+                    sources: vec![source],
+                    api_base: API_BASE.to_owned(),
+                    live_poll: cfg.openai.live_poll,
+                    backoff: Backoff::new(POLL_INTERVAL),
+                });
+            }
+        }
+    }
+    cards
+}
+
+fn poll_live(
+    token: &str,
+    account: Option<&str>,
+    api_base: &str,
+) -> Result<LiveLimits, ProviderError> {
+    let bearer = Zeroizing::new(format!("Bearer {token}"));
     let mut headers = vec![
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
     ];
-    if let Some(account) = account.as_deref() {
+    if let Some(account) = account {
         headers.push(("ChatGPT-Account-Id", account));
     }
     let resp = http::get(&format!("{api_base}/backend-api/wham/usage"), &headers)?;
@@ -292,14 +366,32 @@ impl Provider for OpenAi {
     fn poll(&mut self) -> Result<ProviderSnapshot, ProviderError> {
         // Local data stands in while the live call fails, so the poll still succeeds:
         // the live endpoint needs its own backoff.
-        let (home, base) = (&self.codex_home, &self.api_base);
+        let (sources, base) = (&self.sources, &self.api_base);
         let backoff = &mut self.backoff;
-        let live = self
-            .live_poll
-            .then(|| backoff.call(|| poll_live(home, base)));
+        let live = self.live_poll.then(|| {
+            backoff.call(|| {
+                let mut error = ProviderError::NoCredentials;
+                let mut tried: Vec<Zeroizing<String>> = Vec::new();
+                for (token, account) in sources.iter().flat_map(Source::logins) {
+                    if tried
+                        .iter()
+                        .any(|previous| previous.as_str() == token.as_str())
+                    {
+                        continue;
+                    }
+                    let result = poll_live(&token, account.as_deref(), base);
+                    tried.push(token);
+                    match result {
+                        Err(e @ (ProviderError::Auth | ProviderError::NoCredentials)) => error = e,
+                        result => return result,
+                    }
+                }
+                Err(error)
+            })
+        });
         let local = match live {
             Some(Ok(_)) => None,
-            _ => find_local(&self.codex_home),
+            _ => self.codex_home.as_deref().and_then(find_local),
         };
         merge(live, local, SystemTime::now())
     }
@@ -514,6 +606,115 @@ mod tests {
         let snap = p.poll().unwrap();
         m.assert();
         assert_eq!(snap.plan.as_deref(), Some("plus"));
+    }
+
+    #[test]
+    fn agent_credentials_recover_rejected_codex_login_and_follow_token_rotation() {
+        for agent in ["omo", "omp"] {
+            let home = home_with_auth();
+            let paths = crate::paths::Paths::for_home(home.path());
+            let omo = home.path().join(".omo/agent");
+            fs::create_dir_all(&omo).unwrap();
+            let omp = home.path().join(".omp/agent");
+            fs::create_dir_all(&omp).unwrap();
+            let payload = base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test"}}"#,
+            );
+            let token = format!("h.{payload}.s");
+            let rejected_token = format!("h.{payload}.rejected");
+            let save = |access: &str| {
+                if agent == "omo" {
+                    fs::write(
+                        omo.join("auth.json"),
+                        serde_json::json!({"chatgpt-subscription": {
+                            "access": "not-an-oauth-token",
+                            "accounts": [
+                                {"access": rejected_token, "expires": 4102444800000u64},
+                                {"access": access, "expires": 4102444800000u64}
+                            ]
+                        }})
+                        .to_string(),
+                    )
+                    .unwrap();
+                } else {
+                    let conn = rusqlite::Connection::open(omp.join("agent.db")).unwrap();
+                    conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS auth_credentials (
+                         id INTEGER PRIMARY KEY, provider TEXT, credential_type TEXT,
+                         data TEXT, disabled_cause TEXT, updated_at INTEGER);",
+                    )
+                    .unwrap();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO auth_credentials VALUES
+                         (3, 'openai-codex', 'oauth', ?1, NULL, 3)",
+                        [serde_json::json!({
+                            "access": rejected_token, "accountId": "acct-test",
+                            "expires": 4102444800000u64
+                        })
+                        .to_string()],
+                    )
+                    .unwrap();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO auth_credentials VALUES
+                         (1, 'openai-codex', 'oauth', ?1, NULL, 1)",
+                        [serde_json::json!({
+                            "access": access, "accountId": "acct-test",
+                            "expires": 4102444800000u64
+                        })
+                        .to_string()],
+                    )
+                    .unwrap();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO auth_credentials VALUES
+                         (2, 'openai-codex', 'oauth', ?1, 'disabled', 2)",
+                        [r#"{"access":"disabled-token","accountId":"other"}"#],
+                    )
+                    .unwrap();
+                }
+            };
+            save(&token);
+            let server = MockServer::start();
+            server.mock(|when, then| {
+                when.method(GET)
+                    .path("/backend-api/wham/usage")
+                    .header("authorization", "Bearer test-access");
+                then.status(401);
+            });
+            let rejected = server.mock(|when, then| {
+                when.method(GET)
+                    .path("/backend-api/wham/usage")
+                    .header("authorization", format!("Bearer {rejected_token}"));
+                then.status(401);
+            });
+            let mut live = server.mock(|when, then| {
+                when.method(GET)
+                    .path("/backend-api/wham/usage")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("chatgpt-account-id", "acct-test");
+                then.status(200).body(LIVE);
+            });
+            let cfg = Config::default();
+            let codex = OpenAi::detect(&cfg, &Account::new("", paths.codex_home.clone())).unwrap();
+            let mut cards = merge_agent_logins(&cfg, &paths, vec![codex]);
+            assert_eq!(cards.len(), 1, "same account must share one card");
+            cards[0].api_base = server.base_url();
+            assert_eq!(cards[0].poll().unwrap().windows[0].used_pct, 31.0);
+            live.assert_calls(1);
+            live.delete();
+            let rotated = format!("h.{payload}.rotated");
+            save(&rotated);
+            let refreshed = server.mock(|when, then| {
+                when.method(GET)
+                    .path("/backend-api/wham/usage")
+                    .header("authorization", format!("Bearer {rotated}"))
+                    .header("chatgpt-account-id", "acct-test");
+                then.status(200).body(LIVE);
+            });
+            assert_eq!(cards[0].poll().unwrap().windows[0].used_pct, 31.0);
+            refreshed.assert_calls(1);
+            rejected.assert_calls(2);
+        }
     }
 
     #[test]

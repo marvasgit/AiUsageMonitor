@@ -29,6 +29,7 @@ The monitor finds providers automatically by looking for the credentials their C
 
   Next to the plan, the Claude card shows the account and where its numbers came from: the account's email, masked (only the first two letters of the name and of the domain, plus the top-level domain: `of…@ex….com`), the login that answered (**CC** = Claude Code, **omo**, **omp**) and how. **live** means fetched now. **cached** means the card's last reading, reused within half the poll interval or kept while all tokens fail; a reading loaded from the cache file at startup shows just "cached". **omp saved** means omp's own last reading. Example: `max · of…@ex….com · omo · live`. The email and, when Claude Code gives no plan, the plan (max or pro) come from the profile endpoint, asked once per card at startup or on its first poll. The email is shown only in this masked form and never logged or stored.
 - **OpenAI** — reads the ChatGPT token from `~/.codex/auth.json` (or `$CODEX_HOME`) and calls the ChatGPT usage endpoint (`chatgpt.com/backend-api/wham/usage`) every 60 s. On macOS, when Codex keeps its login in the keychain (`cli_auth_credentials_store = "keyring"` or `"auto"`), the monitor reads the `Codex Auth` item whose account is `cli|<first 16 hex digits of SHA-256 of the Codex folder path>`. If the live call fails, it falls back to the rate limits Codex last wrote into its session logs under `~/.codex/sessions/` and marks the card "as of HH:MM (local)".
+- **Codex logins of omo and omp** — also reads unexpired accounts under omo's `chatgpt-subscription.accounts` and enabled `openai-codex` OAuth rows in omp's read-only database. The paths and switches are shared with the Claude integration: `[omo] auth`, `[omp] db`, and each agent's `enabled` setting. Tokens with the same ChatGPT account id join one OpenAI card. Other accounts get separate cards. If Codex CLI authentication is rejected, the monitor tries the agent tokens before local logs. It rereads credentials each poll, so omo and omp maintain token refresh. The monitor never refreshes tokens or writes credentials.
 - **GitHub Copilot** — uses the first GitHub login it finds: `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the Copilot CLI entry (`copilot-cli`) in the OS keychain, copilot.vim/lua's `github-copilot/apps.json`, or the `gh` CLI login (`hosts.yml`, or its `gh:github.com` keychain entry). Classic `ghp_` tokens in the environment are skipped because Copilot does not accept them. A GitHub login without a Copilot subscription shows "no Copilot subscription"; set `[copilot] enabled = false` to hide the card. It calls GitHub's internal Copilot usage endpoint (`api.github.com/copilot_internal/user`) every 5 minutes.
 - **Cursor** — uses the `cursor-agent` login (`~/.config/cursor/auth.json`, Windows `%APPDATA%\Cursor\auth.json`, or `$CURSOR_CLI_AUTH_FILE`) or the Cursor app's local database (opened read-only), and calls Cursor's usage summary (`cursor.com/api/usage-summary`) every 5 minutes. Cursor logins expire; when that happens the card turns red until you open Cursor (or run `cursor-agent`) again.
 - **MiniMax** — uses `$MINIMAX_API_KEY` or the key stored by the `mmx` CLI in `~/.mmx/config.json`, and calls the Coding Plan endpoint (`api.minimax.io/v1/api/openplatform/coding_plan/remains`, or `api.minimaxi.com` for the `cn` region) every 120 s.
@@ -112,11 +113,11 @@ models = ["general"]      # add "video" etc. to show more MiniMax quotas
 enabled = true
 api_key_env = "OPENROUTER_API_KEY"
 
-[omp]                     # omp's Claude login (also off when [claude] is off)
+[omp]                     # omp's Claude and Codex subscription logins
 enabled = true
 db = "~/.omp/agent/agent.db"
 
-[omo]                     # omo's Claude login (also off when [claude] is off)
+[omo]                     # omo's Claude and Codex subscription logins
 enabled = true
 auth = "~/.omo/agent/auth.json"
 

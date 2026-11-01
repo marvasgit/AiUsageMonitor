@@ -84,16 +84,18 @@ pub fn all_providers(cfg: &Config, paths: &Paths) -> Vec<Box<dyn Provider>> {
     }
     if cfg.openai.enabled {
         let openai = &cfg.openai;
-        for account in accounts_for(
+        let cards = accounts_for(
             paths,
             &paths.codex_home,
             &CODEX_RULES,
             &openai.accounts,
             &openai.hide,
-        ) {
-            if let Some(p) = OpenAi::detect(cfg, &account) {
-                found.push(Box::new(p));
-            }
+        )
+        .iter()
+        .filter_map(|account| OpenAi::detect(cfg, account))
+        .collect();
+        for card in openai::merge_agent_logins(cfg, paths, cards) {
+            found.push(Box::new(card));
         }
     }
     if let Some(p) = Copilot::detect(cfg, paths) {
@@ -178,6 +180,31 @@ mod tests {
 
     fn ids(list: &[Box<dyn Provider>]) -> Vec<&str> {
         list.iter().map(|p| p.id()).collect()
+    }
+
+    #[test]
+    fn detects_chatgpt_subscription_without_codex_cli_login() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".omo/agent");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("auth.json"),
+            r#"{"chatgpt-subscription":{"accounts":[
+                {"access":"agent-token","accountId":"agent-account","expires":4102444800000},
+                {"access":"other-token","accountId":"other-account","expires":4102444800000},
+                {"access":"expired-token","accountId":"expired-account","expires":0},
+                {"access":"","accountId":"empty-account"}
+            ]}}"#,
+        )
+        .unwrap();
+        let mut config = cfg();
+        config.claude.enabled = false;
+        assert_eq!(
+            ids(&all_providers(&config, &Paths::for_home(home.path()))),
+            vec!["openai", "openai:omo"]
+        );
+        config.omo.enabled = false;
+        assert!(all_providers(&config, &Paths::for_home(home.path())).is_empty());
     }
 
     #[test]
