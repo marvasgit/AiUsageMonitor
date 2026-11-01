@@ -40,6 +40,7 @@ models = ["general"]
 [openrouter]
 enabled = true
 api_key_env = "OPENROUTER_API_KEY"
+management_key_env = "OPENROUTER_MANAGEMENT_KEY"   # when set: whole-account spend instead of one key
 
 [omp]                            # omp's Claude and Codex subscription logins
 enabled = true

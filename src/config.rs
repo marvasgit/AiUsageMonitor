@@ -127,6 +127,9 @@ pub struct OpenRouterConfig {
     pub enabled: bool,
     /// Environment variable that holds the OpenRouter API key.
     pub api_key_env: String,
+    /// Environment variable that holds an OpenRouter management key; when set, the card
+    /// shows the whole account instead of one API key.
+    pub management_key_env: String,
 }
 
 impl Default for OpenRouterConfig {
@@ -134,6 +137,7 @@ impl Default for OpenRouterConfig {
         Self {
             enabled: true,
             api_key_env: "OPENROUTER_API_KEY".into(),
+            management_key_env: "OPENROUTER_MANAGEMENT_KEY".into(),
         }
     }
 }

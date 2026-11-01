@@ -126,7 +126,7 @@ fn header(ui: &mut egui::Ui, state: &ProviderState, now: SystemTime) {
         if let Some(source) = snap.and_then(|s| s.source.as_deref()) {
             ui.label(RichText::new(source).small().color(theme::MUTED))
                 .on_hover_text(
-                    "Login that answered (CC = Claude Code) · how the numbers were obtained",
+                    "Login that answered (CC = Claude Code) · how the numbers were obtained\n\u{1F5DD} = one API key · \u{26C3} = whole account",
                 );
         }
         if let Some(session) = snap.and_then(|s| s.session.as_ref()) {

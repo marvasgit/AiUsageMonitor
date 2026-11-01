@@ -150,6 +150,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.minimax.api_key_env = "AUM_TEST_UNSET_MINIMAX_KEY".into();
         cfg.openrouter.api_key_env = "AUM_TEST_UNSET_OPENROUTER_KEY".into();
+        cfg.openrouter.management_key_env = "AUM_TEST_UNSET_OPENROUTER_MGMT_KEY".into();
         // Copilot reads the real env/keychain; covered by its own tests.
         cfg.copilot.enabled = false;
         cfg
