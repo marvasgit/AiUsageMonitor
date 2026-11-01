@@ -332,14 +332,17 @@ pub fn merge_agent_logins(
     cards
 }
 
-fn poll_live(source: &Source, api_base: &str) -> Result<LiveLimits, ProviderError> {
-    let (token, account) = source.login().ok_or(ProviderError::NoCredentials)?;
-    let bearer = Zeroizing::new(format!("Bearer {}", token.as_str()));
+fn poll_live(
+    token: &str,
+    account: Option<&str>,
+    api_base: &str,
+) -> Result<LiveLimits, ProviderError> {
+    let bearer = Zeroizing::new(format!("Bearer {token}"));
     let mut headers = vec![
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
     ];
-    if let Some(account) = account.as_deref() {
+    if let Some(account) = account {
         headers.push(("ChatGPT-Account-Id", account));
     }
     let resp = http::get(&format!("{api_base}/backend-api/wham/usage"), &headers)?;
@@ -368,8 +371,17 @@ impl Provider for OpenAi {
         let live = self.live_poll.then(|| {
             backoff.call(|| {
                 let mut error = ProviderError::NoCredentials;
-                for source in sources {
-                    match poll_live(source, base) {
+                let mut tried: Vec<Zeroizing<String>> = Vec::new();
+                for (token, account) in sources.iter().flat_map(Source::logins) {
+                    if tried
+                        .iter()
+                        .any(|previous| previous.as_str() == token.as_str())
+                    {
+                        continue;
+                    }
+                    let result = poll_live(&token, account.as_deref(), base);
+                    tried.push(token);
+                    match result {
                         Err(e @ (ProviderError::Auth | ProviderError::NoCredentials)) => error = e,
                         result => return result,
                     }
@@ -610,13 +622,17 @@ mod tests {
                 r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-test"}}"#,
             );
             let token = format!("h.{payload}.s");
+            let rejected_token = format!("h.{payload}.rejected");
             let save = |access: &str| {
                 if agent == "omo" {
                     fs::write(
                         omo.join("auth.json"),
                         serde_json::json!({"chatgpt-subscription": {
                             "access": "not-an-oauth-token",
-                            "accounts": [{"access": access, "expires": 4102444800000u64}]
+                            "accounts": [
+                                {"access": rejected_token, "expires": 4102444800000u64},
+                                {"access": access, "expires": 4102444800000u64}
+                            ]
                         }})
                         .to_string(),
                     )
@@ -627,6 +643,16 @@ mod tests {
                         "CREATE TABLE IF NOT EXISTS auth_credentials (
                          id INTEGER PRIMARY KEY, provider TEXT, credential_type TEXT,
                          data TEXT, disabled_cause TEXT, updated_at INTEGER);",
+                    )
+                    .unwrap();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO auth_credentials VALUES
+                         (3, 'openai-codex', 'oauth', ?1, NULL, 3)",
+                        [serde_json::json!({
+                            "access": rejected_token, "accountId": "acct-test",
+                            "expires": 4102444800000u64
+                        })
+                        .to_string()],
                     )
                     .unwrap();
                     conn.execute(
@@ -655,6 +681,12 @@ mod tests {
                     .header("authorization", "Bearer test-access");
                 then.status(401);
             });
+            let rejected = server.mock(|when, then| {
+                when.method(GET)
+                    .path("/backend-api/wham/usage")
+                    .header("authorization", format!("Bearer {rejected_token}"));
+                then.status(401);
+            });
             let mut live = server.mock(|when, then| {
                 when.method(GET)
                     .path("/backend-api/wham/usage")
@@ -681,6 +713,7 @@ mod tests {
             });
             assert_eq!(cards[0].poll().unwrap().windows[0].used_pct, 31.0);
             refreshed.assert_calls(1);
+            rejected.assert_calls(2);
         }
     }
 

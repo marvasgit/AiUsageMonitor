@@ -122,10 +122,10 @@ pub(super) struct Source {
 }
 
 impl Source {
-    pub(super) fn login(&self) -> Option<Login> {
+    pub(super) fn logins(&self) -> impl Iterator<Item = Login> + '_ {
         self.credentials
             .logins()
             .into_iter()
-            .find(|(_, account)| *account == self.account)
+            .filter(|(_, account)| *account == self.account)
     }
 }
