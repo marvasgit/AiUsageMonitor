@@ -41,11 +41,11 @@ models = ["general"]
 enabled = true
 api_key_env = "OPENROUTER_API_KEY"
 
-[omp]                            # omp's Claude login (also off when [claude] is off)
+[omp]                            # omp's Claude and Codex subscription logins
 enabled = true
 db = "~/.omp/agent/agent.db"
 
-[omo]                            # omo's Claude login (also off when [claude] is off)
+[omo]                            # omo's Claude and Codex subscription logins
 enabled = true
 auth = "~/.omo/agent/auth.json"
 

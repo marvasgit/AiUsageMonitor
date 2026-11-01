@@ -138,7 +138,7 @@ impl Default for OpenRouterConfig {
     }
 }
 
-/// omp's Claude subscription login, an extra token source for the Claude card of its account.
+/// omp's Claude and Codex subscription logins, grouped with their accounts' cards.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct OmpConfig {
@@ -156,7 +156,7 @@ impl Default for OmpConfig {
     }
 }
 
-/// omo's Claude subscription login, an extra token source for the Claude card of its account.
+/// omo's Claude and Codex subscription logins, grouped with their accounts' cards.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct OmoConfig {
