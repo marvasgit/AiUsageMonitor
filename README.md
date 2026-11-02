@@ -17,6 +17,7 @@ When a window first passes 80 % and again at 95 %, a desktop notification says s
 | GitHub Copilot | Monthly Premium requests or AI credits; Chat and Completions when limited | Plan |
 | Cursor | Plan and API usage of the billing cycle | Plan, on-demand spend |
 | MiniMax | Interval (5-hour), weekly | Plan |
+| OpenRouter | Dollars spent today, this week, this month by one API key; or this week and month by the whole account with a management key | Credit limit or account balance left |
 
 Bars turn amber at 60 % and red at 85 %; the `ctx` bar uses `[context] warn` / `crit` (same defaults). When the session's context first passes `[context] notify` (80 % and 95 % by default) a desktop notification says so; it re-arms once the context drops below the lowest of them, e.g. after compacting or starting a new session. Click a reset time to switch between a countdown and the local reset time. A coloured dot next to each provider shows its status: green (ok), grey (loading), amber (network or unexpected response), red (credentials missing or rejected). The error text is shown under the provider name.
 
@@ -33,7 +34,18 @@ The monitor finds providers automatically by looking for the credentials their C
 - **GitHub Copilot** — uses the first GitHub login it finds: `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, the Copilot CLI entry (`copilot-cli`) in the OS keychain, copilot.vim/lua's `github-copilot/apps.json`, or the `gh` CLI login (`hosts.yml`, or its `gh:github.com` keychain entry). Classic `ghp_` tokens in the environment are skipped because Copilot does not accept them. A GitHub login without a Copilot subscription shows "no Copilot subscription"; set `[copilot] enabled = false` to hide the card. It calls GitHub's internal Copilot usage endpoint (`api.github.com/copilot_internal/user`) every 5 minutes.
 - **Cursor** — uses the `cursor-agent` login (`~/.config/cursor/auth.json`, Windows `%APPDATA%\Cursor\auth.json`, or `$CURSOR_CLI_AUTH_FILE`) or the Cursor app's local database (opened read-only), and calls Cursor's usage summary (`cursor.com/api/usage-summary`) every 5 minutes. Cursor logins expire; when that happens the card turns red until you open Cursor (or run `cursor-agent`) again.
 - **MiniMax** — uses `$MINIMAX_API_KEY` or the key stored by the `mmx` CLI in `~/.mmx/config.json`, and calls the Coding Plan endpoint (`api.minimax.io/v1/api/openplatform/coding_plan/remains`, or `api.minimaxi.com` for the `cn` region) every 120 s.
-- **OpenRouter** — uses `$OPENROUTER_API_KEY` (`[openrouter] api_key_env`) and calls `openrouter.ai/api/v1/key` every 5 minutes. The card shows the dollars the key spent today, this week and this month. These are calendar periods in UTC, as OpenRouter counts them (the week starts on Monday), not rolling 1, 7 and 30 days. Each row's reset time is the end of its period. Without a credit limit there are no bars. With a limit, the period the limit resets on gets a bar for its share of the limit (a limit that never resets adds a "total" row), and the note shows what is left.
+- **OpenRouter** — uses `$OPENROUTER_API_KEY` (`[openrouter] api_key_env`) and calls `openrouter.ai/api/v1/key` every 5 minutes. The card shows the dollars the key spent today, this week and this month. These are calendar periods in UTC, as OpenRouter counts them (the week starts on Monday), not rolling 1, 7 and 30 days. Each row's reset time is the end of its period. Without a credit limit there are no bars. With a limit, the period the limit resets on gets a bar for its share of the limit (a limit that never resets adds a "total" row), and the note shows what is left. These numbers belong to that one key only; the card is marked 🗝 (one key).
+
+  For the whole account, create a [management key](https://openrouter.ai/docs/guides/overview/auth/management-api-keys) and put it in `$OPENROUTER_MANAGEMENT_KEY` (`[openrouter] management_key_env`). The card is then marked ⛃ (whole account) and calls `openrouter.ai/api/v1/credits` and `/api/v1/activity` instead. It shows the account's spend this week and this month, a "credits" row with the share of all purchased credits used, and the balance left in the note. OpenRouter reports account activity only for completed UTC days, so the week and month rows run to the end of yesterday and there is no "day" row. On a Monday the week row and on the 1st the month row show $0.00. The card appears when either key is set.
+
+  A normal API key does not work here: OpenRouter accepts only management keys on these endpoints, and a normal key gives a red dot. A management key in turn cannot make model calls, so keep `$OPENROUTER_API_KEY` for your tools and add the management key next to it. To create one:
+
+  1. Open [Management API Keys](https://openrouter.ai/settings/management-keys) in the OpenRouter settings. In an organization, only an Organization Admin can do this.
+  2. Click **Create New Key**, give it a name and an expiration date. Choose read-only if offered; the monitor only reads.
+  3. Copy the key. OpenRouter shows it only once.
+  4. Set `OPENROUTER_MANAGEMENT_KEY` to it in the environment that starts the monitor, then restart the monitor.
+
+  Use an organization-wide key. A workspace-scoped key is refused on account-level endpoints. The expiration cannot be changed later; when it passes, the card turns red with "authentication rejected" until you create a new key and replace the variable.
 
 The Copilot and Cursor endpoints are internal to those services and may change without notice.
 
@@ -112,6 +124,7 @@ models = ["general"]      # add "video" etc. to show more MiniMax quotas
 [openrouter]
 enabled = true
 api_key_env = "OPENROUTER_API_KEY"
+management_key_env = "OPENROUTER_MANAGEMENT_KEY"   # when set: whole-account spend instead of one key
 
 [omp]                     # omp's Claude and Codex subscription logins
 enabled = true

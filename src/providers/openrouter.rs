@@ -1,5 +1,7 @@
-//! OpenRouter: credits spent by the API key today, this week and this month
-//! (`GET /api/v1/key`). Periods are calendar periods in UTC, as OpenRouter counts them.
+//! OpenRouter: credits spent today, this week and this month. With a management key the
+//! numbers cover the whole account (`GET /api/v1/credits` and `/api/v1/activity`),
+//! otherwise only the API key (`GET /api/v1/key`). Periods are calendar periods in UTC,
+//! as OpenRouter counts them.
 
 use super::{EnvFn, Provider, ProviderError};
 use crate::config::Config;
@@ -12,6 +14,10 @@ use zeroize::Zeroizing;
 
 pub const API_BASE: &str = "https://openrouter.ai";
 const POLL_INTERVAL: Duration = Duration::from_secs(300);
+/// Card marker: the numbers cover one API key.
+pub const KEY_ICON: &str = "🗝";
+/// Card marker: the numbers cover the whole account (management key).
+pub const ACCOUNT_ICON: &str = "⛃";
 
 #[derive(Deserialize)]
 struct KeyResponse {
@@ -32,6 +38,33 @@ struct KeyData {
     is_free_tier: bool,
 }
 
+#[derive(Deserialize)]
+struct CreditsResponse {
+    data: CreditsData,
+}
+
+#[derive(Deserialize)]
+struct CreditsData {
+    total_credits: f64,
+    total_usage: f64,
+}
+
+/// Account spend per day, model and endpoint for the last 30 completed UTC days.
+#[derive(Deserialize)]
+struct ActivityResponse {
+    data: Vec<ActivityItem>,
+}
+
+#[derive(Deserialize)]
+struct ActivityItem {
+    date: String,
+    usage: f64,
+}
+
+fn parse_error(e: impl ToString) -> ProviderError {
+    ProviderError::Parse(e.to_string())
+}
+
 fn dollars(amount: f64) -> String {
     format!("${amount:.2}")
 }
@@ -40,15 +73,22 @@ fn midnight(date: NaiveDate) -> Option<SystemTime> {
     Some(date.and_hms_opt(0, 0, 0)?.and_utc().into())
 }
 
+/// The Monday of `today`'s ISO week and the first day of its month.
+fn period_starts(today: NaiveDate) -> (NaiveDate, NaiveDate) {
+    (
+        today.week(chrono::Weekday::Mon).first_day(),
+        today - Days::new(today.day0().into()),
+    )
+}
+
 /// Next UTC start of the day, the ISO week (Monday) and the month after `now`.
 fn period_ends(now: SystemTime) -> [Option<SystemTime>; 3] {
     let today = DateTime::<Utc>::from(now).date_naive();
-    let monday = today.week(chrono::Weekday::Mon).first_day();
-    let first = today.with_day(1);
+    let (monday, first) = period_starts(today);
     [
         today.checked_add_days(Days::new(1)),
         monday.checked_add_days(Days::new(7)),
-        first.and_then(|d| d.checked_add_months(Months::new(1))),
+        first.checked_add_months(Months::new(1)),
     ]
     .map(|d| d.and_then(midnight))
 }
@@ -96,6 +136,7 @@ pub fn parse_key(body: &str, now: SystemTime) -> Result<ProviderSnapshot, Provid
         ));
     }
     let mut snap = ProviderSnapshot::new(windows);
+    snap.source = Some(KEY_ICON.to_string());
     snap.plan = key.is_free_tier.then(|| "free tier".to_string());
     snap.note = match (key.limit, key.limit_remaining) {
         (Some(l), Some(left)) => Some(format!("{} left of {}", dollars(left), dollars(l))),
@@ -104,25 +145,76 @@ pub fn parse_key(body: &str, now: SystemTime) -> Result<ProviderSnapshot, Provid
     Ok(snap)
 }
 
+/// Maps the account's credits and activity to "week", "month" and "credits" windows.
+/// OpenRouter reports activity only for completed UTC days, so the week and month rows
+/// run to the end of yesterday and there is no "day" row. The "credits" bar is the share
+/// of all purchased credits that has been used.
+pub fn parse_account(
+    credits: &str,
+    activity: &str,
+    now: SystemTime,
+) -> Result<ProviderSnapshot, ProviderError> {
+    let credits = serde_json::from_str::<CreditsResponse>(credits)
+        .map_err(parse_error)?
+        .data;
+    let days = serde_json::from_str::<ActivityResponse>(activity)
+        .map_err(parse_error)?
+        .data
+        .into_iter()
+        .map(|item| {
+            // Documented as "YYYY-MM-DD", but sent as "YYYY-MM-DD 00:00:00".
+            let (date, _) =
+                NaiveDate::parse_and_remainder(&item.date, "%Y-%m-%d").map_err(parse_error)?;
+            Ok((date, item.usage))
+        })
+        .collect::<Result<Vec<_>, ProviderError>>()?;
+    let today = DateTime::<Utc>::from(now).date_naive();
+    let (monday, first) = period_starts(today);
+    let spent_since = |start: NaiveDate| -> f64 {
+        days.iter()
+            .filter(|(date, _)| (start..today).contains(date))
+            // fold from 0.0: an empty f64 `sum()` is -0.0, shown as "$-0.00".
+            .fold(0.0, |total, (_, usage)| total + usage)
+    };
+    let [_, week_end, month_end] = period_ends(now);
+    let share =
+        (credits.total_credits > 0.0).then(|| credits.total_usage / credits.total_credits * 100.0);
+    let mut snap = ProviderSnapshot::new(vec![
+        Window::amount("week", dollars(spent_since(monday)), None, week_end),
+        Window::amount("month", dollars(spent_since(first)), None, month_end),
+        Window::amount("credits", dollars(credits.total_usage), share, None),
+    ]);
+    snap.source = Some(ACCOUNT_ICON.to_string());
+    snap.note = Some(format!(
+        "{} left of {} · week and month to yesterday (UTC)",
+        dollars(credits.total_credits - credits.total_usage),
+        dollars(credits.total_credits)
+    ));
+    Ok(snap)
+}
+
 pub struct OpenRouter {
     api_key_env: String,
+    management_key_env: String,
     env: EnvFn,
     api_base: String,
 }
 
 impl OpenRouter {
-    /// Present when the configured environment variable holds a key.
+    /// Present when the configured environment variables hold an API or management key.
     pub fn detect(cfg: &Config, env: EnvFn) -> Option<Self> {
         if !cfg.openrouter.enabled {
             return None;
         }
         let provider = Self {
             api_key_env: cfg.openrouter.api_key_env.clone(),
+            management_key_env: cfg.openrouter.management_key_env.clone(),
             env,
             api_base: API_BASE.to_string(),
         };
-        provider.key()?;
-        Some(provider)
+        (provider.key(&provider.api_key_env).is_some()
+            || provider.key(&provider.management_key_env).is_some())
+        .then_some(provider)
     }
 
     pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
@@ -130,10 +222,23 @@ impl OpenRouter {
         self
     }
 
-    fn key(&self) -> Option<Zeroizing<String>> {
-        let value = Zeroizing::new((self.env)(&self.api_key_env)?);
+    fn key(&self, env_name: &str) -> Option<Zeroizing<String>> {
+        let value = Zeroizing::new((self.env)(env_name)?);
         let key = value.trim();
         (!key.is_empty()).then(|| Zeroizing::new(key.to_string()))
+    }
+
+    fn fetch(&self, path: &str, key: &str) -> Result<String, ProviderError> {
+        let bearer = Zeroizing::new(format!("Bearer {key}"));
+        let resp = http::get(
+            &format!("{}{path}", self.api_base),
+            &[
+                ("Authorization", bearer.as_str()),
+                ("Accept", "application/json"),
+            ],
+        )?;
+        resp.check()?;
+        Ok(resp.body)
     }
 }
 
@@ -151,17 +256,15 @@ impl Provider for OpenRouter {
     }
 
     fn poll(&mut self) -> Result<ProviderSnapshot, ProviderError> {
-        let key = self.key().ok_or(ProviderError::NoCredentials)?;
-        let bearer = Zeroizing::new(format!("Bearer {}", key.as_str()));
-        let resp = http::get(
-            &format!("{}/api/v1/key", self.api_base),
-            &[
-                ("Authorization", bearer.as_str()),
-                ("Accept", "application/json"),
-            ],
-        )?;
-        resp.check()?;
-        parse_key(&resp.body, SystemTime::now())
+        if let Some(management) = self.key(&self.management_key_env) {
+            let credits = self.fetch("/api/v1/credits", &management)?;
+            let activity = self.fetch("/api/v1/activity", &management)?;
+            return parse_account(&credits, &activity, SystemTime::now());
+        }
+        let key = self
+            .key(&self.api_key_env)
+            .ok_or(ProviderError::NoCredentials)?;
+        parse_key(&self.fetch("/api/v1/key", &key)?, SystemTime::now())
     }
 }
 
@@ -250,8 +353,78 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn account_sums_completed_days_of_this_week_and_month() {
+        // Wednesday 2026-11-04: the week started Monday 11-02, the month on Sunday 11-01.
+        let credits = r#"{"data":{"total_credits":50,"total_usage":40}}"#;
+        let activity = r#"{"data":[
+            {"date":"2026-10-31","usage":5,"model":"a"},
+            {"date":"2026-11-01","usage":2,"model":"a"},
+            {"date":"2026-11-02 00:00:00","usage":1.5,"model":"a"},
+            {"date":"2026-11-03 00:00:00","usage":0.25,"model":"a"},
+            {"date":"2026-11-03 00:00:00","usage":0.5,"model":"b"},
+            {"date":"2026-11-04","usage":9,"model":"a"}]}"#;
+        let snap = parse_account(credits, activity, at("2026-11-04T10:00:00Z")).unwrap();
+        assert_eq!(
+            shown(&snap),
+            vec![
+                ("week", "$2.25", None),
+                ("month", "$4.25", None),
+                ("credits", "$40.00", Some(80.0))
+            ]
+        );
+        let resets: Vec<_> = snap.windows.iter().map(|w| w.resets_at).collect();
+        assert_eq!(
+            resets,
+            vec![
+                Some(at("2026-11-09T00:00:00Z")),
+                Some(at("2026-12-01T00:00:00Z")),
+                None
+            ]
+        );
+        assert_eq!(snap.source.as_deref(), Some(ACCOUNT_ICON));
+        assert!(snap.note.unwrap().starts_with("$10.00 left of $50.00"));
+    }
+
+    #[test]
+    fn account_rejects_bad_dates_and_bodies() {
+        let credits = r#"{"data":{"total_credits":0,"total_usage":0}}"#;
+        let now = SystemTime::now();
+        let bad_date = r#"{"data":[{"date":"yesterday","usage":1}]}"#;
+        assert!(matches!(
+            parse_account(credits, bad_date, now),
+            Err(ProviderError::Parse(_))
+        ));
+        assert!(matches!(
+            parse_account("<html>", r#"{"data":[]}"#, now),
+            Err(ProviderError::Parse(_))
+        ));
+        // No purchased credits: amounts only, no bar.
+        let empty = parse_account(credits, r#"{"data":[]}"#, now).unwrap();
+        assert_eq!(
+            shown(&empty),
+            vec![
+                ("week", "$0.00", None),
+                ("month", "$0.00", None),
+                ("credits", "$0.00", None)
+            ]
+        );
+    }
+
     fn env_with_key(name: &str) -> Option<String> {
         (name == "OPENROUTER_API_KEY").then(|| " or-key \n".to_string())
+    }
+
+    fn env_with_both(name: &str) -> Option<String> {
+        match name {
+            "OPENROUTER_API_KEY" => Some("or-key".to_string()),
+            "OPENROUTER_MANAGEMENT_KEY" => Some("mgmt-key".to_string()),
+            _ => None,
+        }
+    }
+
+    fn env_management_only(name: &str) -> Option<String> {
+        (name == "OPENROUTER_MANAGEMENT_KEY").then(|| "mgmt-key".to_string())
     }
 
     fn env_blank(_: &str) -> Option<String> {
@@ -262,6 +435,7 @@ mod tests {
     fn detect_needs_key_and_enabled() {
         assert!(OpenRouter::detect(&Config::default(), env_with_key).is_some());
         assert!(OpenRouter::detect(&Config::default(), env_blank).is_none());
+        assert!(OpenRouter::detect(&Config::default(), env_management_only).is_some());
         let mut cfg = Config::default();
         cfg.openrouter.enabled = false;
         assert!(OpenRouter::detect(&cfg, env_with_key).is_none());
@@ -287,5 +461,36 @@ mod tests {
             then.status(401);
         });
         assert_eq!(p.poll().unwrap_err(), ProviderError::Auth);
+    }
+
+    #[test]
+    fn management_key_polls_the_account_not_the_key() {
+        let server = MockServer::start();
+        let key = server.mock(|when, then| {
+            when.method(GET).path("/api/v1/key");
+            then.status(200).body(body("null", "null"));
+        });
+        let credits = server.mock(|when, then| {
+            when.method(GET)
+                .path("/api/v1/credits")
+                .header("authorization", "Bearer mgmt-key");
+            then.status(200)
+                .body(r#"{"data":{"total_credits":10,"total_usage":4}}"#);
+        });
+        let activity = server.mock(|when, then| {
+            when.method(GET)
+                .path("/api/v1/activity")
+                .header("authorization", "Bearer mgmt-key");
+            then.status(200).body(r#"{"data":[]}"#);
+        });
+        let mut p = OpenRouter::detect(&Config::default(), env_with_both)
+            .unwrap()
+            .with_api_base(server.base_url());
+        let snap = p.poll().unwrap();
+        assert_eq!(snap.source.as_deref(), Some(ACCOUNT_ICON));
+        assert_eq!(snap.windows[2].used_pct, 40.0);
+        credits.assert();
+        activity.assert();
+        key.assert_calls(0);
     }
 }

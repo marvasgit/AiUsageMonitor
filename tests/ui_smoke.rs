@@ -1,5 +1,6 @@
 use aum::config::ContextConfig;
 use aum::model::{ProviderError, ProviderSnapshot, ProviderState, Session, Window};
+use aum::providers::openrouter;
 use aum::ui::app::{draw_body, draw_with_menu};
 use aum::ui::card::TimeMode;
 use egui_kittest::kittest::Queryable;
@@ -60,6 +61,18 @@ fn renders_all_provider_cards() {
     harness.get_by_label_contains("72.2K / 200.0K");
     harness.get_by_label_contains("as of 10:06 (local)");
     harness.get_by_label_contains("authentication rejected");
+}
+
+#[test]
+fn openrouter_scope_icons_exist_in_default_fonts() {
+    // egui's bundled fonts lack many emoji (e.g. U+1F511 key); a missing glyph shows as a box.
+    let mut harness = Harness::new_ui(|ui| {
+        let font = egui::FontId::proportional(12.0);
+        for icon in [openrouter::KEY_ICON, openrouter::ACCOUNT_ICON] {
+            assert!(ui.ctx().fonts_mut(|f| f.has_glyphs(&font, icon)), "{icon}");
+        }
+    });
+    harness.run();
 }
 
 #[test]
