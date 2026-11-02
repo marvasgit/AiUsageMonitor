@@ -5,7 +5,9 @@ use super::theme;
 use crate::config::ContextConfig;
 use crate::model::ProviderState;
 use crate::poller::SharedState;
+use crate::update::{self, Status, Updater};
 use egui::{RichText, Sense, ViewportCommand, WindowLevel};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -54,8 +56,56 @@ pub fn draw_with_menu(
     resets.iter().any(egui::Response::clicked)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdateAction {
+    Install,
+    OpenPage(String),
+    Restart,
+}
+
+/// A clickable line about a found or installed update; returns the action clicked.
+pub fn draw_update_banner(ui: &mut egui::Ui, status: &Status) -> Option<UpdateAction> {
+    let (text, action) = match status {
+        Status::Available(r) if r.binary.is_some() => (
+            format!("Update to v{} available - click to install", r.version),
+            Some(UpdateAction::Install),
+        ),
+        Status::Available(r) => (
+            format!("v{} available - click to open the download page", r.version),
+            Some(UpdateAction::OpenPage(r.page.clone())),
+        ),
+        Status::Installing(r) => (format!("Installing v{}...", r.version), None),
+        Status::Installed(r) => (
+            format!("v{} installed - click to restart", r.version),
+            Some(UpdateAction::Restart),
+        ),
+        Status::Idle | Status::Checking | Status::UpToDate | Status::Failed(_) => return None,
+    };
+    let clicked = if action.is_some() {
+        ui.button(RichText::new(text).color(theme::HEADER))
+            .clicked()
+    } else {
+        ui.label(RichText::new(text).color(theme::MUTED));
+        false
+    };
+    action.filter(|_| clicked)
+}
+
+fn update_status_line(status: &Status) -> String {
+    match status {
+        Status::Idle => "Updates not checked yet".into(),
+        Status::Checking => "Checking for updates...".into(),
+        Status::UpToDate => "Up to date".into(),
+        Status::Available(r) => format!("v{} available", r.version),
+        Status::Installing(r) => format!("Installing v{}...", r.version),
+        Status::Installed(r) => format!("v{} installed; restart to use it", r.version),
+        Status::Failed(e) => format!("Update failed: {e}"),
+    }
+}
+
 pub struct MonitorApp {
     state: SharedState,
+    updater: Updater,
     time_mode: TimeMode,
     always_on_top: bool,
     config_dir: PathBuf,
@@ -70,6 +120,7 @@ impl MonitorApp {
         always_on_top: bool,
         config_dir: PathBuf,
         context: ContextConfig,
+        updater: Updater,
     ) -> Self {
         theme::apply(&cc.egui_ctx);
         let time_mode = cc
@@ -86,6 +137,7 @@ impl MonitorApp {
         }
         Self {
             state,
+            updater,
             time_mode,
             always_on_top,
             config_dir,
@@ -121,7 +173,14 @@ impl MonitorApp {
             open_folder(&self.config_dir);
         }
         ui.separator();
-        ui.label(format!("AI Usage Monitor v{}", env!("CARGO_PKG_VERSION")));
+        ui.label(format!("AI Usage Monitor v{}", update::CURRENT));
+        let status = self.updater.status();
+        ui.label(RichText::new(update_status_line(&status)).color(theme::MUTED));
+        if !matches!(status, Status::Installing(_) | Status::Installed(_))
+            && ui.button("Check for updates").clicked()
+        {
+            self.updater.check_now();
+        }
         ui.label("MIT licence");
     }
 
@@ -134,6 +193,17 @@ impl MonitorApp {
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width, wanted)));
         }
     }
+
+    fn run_update_action(&self, ctx: &egui::Context, action: UpdateAction) {
+        match action {
+            UpdateAction::Install => self.updater.install(),
+            UpdateAction::OpenPage(url) => open(OsStr::new(&url)),
+            UpdateAction::Restart => match self.updater.restart() {
+                Ok(()) => ctx.send_viewport_cmd(ViewportCommand::Close),
+                Err(e) => log::warn!("cannot restart: {e}"),
+            },
+        }
+    }
 }
 
 fn open_folder(dir: &Path) {
@@ -142,6 +212,11 @@ fn open_folder(dir: &Path) {
     } else {
         dir.parent().unwrap_or(dir)
     };
+    open(target.as_os_str());
+}
+
+/// Opens a folder or URL with the desktop's default handler.
+fn open(target: &OsStr) {
     let program = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -150,7 +225,7 @@ fn open_folder(dir: &Path) {
         "xdg-open"
     };
     if let Err(e) = std::process::Command::new(program).arg(target).spawn() {
-        log::warn!("cannot open config folder: {e}");
+        log::warn!("cannot open {}: {e}", target.to_string_lossy());
     }
 }
 
@@ -160,16 +235,24 @@ impl eframe::App for MonitorApp {
         ctx.request_repaint_after(REPAINT_EVERY);
         let states = self.state.read().unwrap_or_else(|p| p.into_inner()).clone();
         let mode = self.time_mode;
+        let update_status = self.updater.status();
         let inner = egui::Frame::central_panel(ui.style())
             .fill(theme::BG)
             .show(ui, |ui| {
                 let context = self.context.clone();
-                draw_with_menu(ui, &states, SystemTime::now(), mode, &context, |ui| {
-                    self.context_menu(ui)
-                })
+                let reset_clicked =
+                    draw_with_menu(ui, &states, SystemTime::now(), mode, &context, |ui| {
+                        self.context_menu(ui)
+                    });
+                // Drawn after the cards so it sits above the menu's background hit area.
+                (reset_clicked, draw_update_banner(ui, &update_status))
             });
-        if inner.inner {
+        let (reset_clicked, update_action) = inner.inner;
+        if reset_clicked {
             self.toggle_time_mode();
+        }
+        if let Some(action) = update_action {
+            self.run_update_action(&ctx, action);
         }
         self.fit_height(&ctx, inner.response.rect.height());
     }

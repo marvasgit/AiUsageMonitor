@@ -26,7 +26,7 @@ fn main() -> eframe::Result {
     ));
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title(format!("AI Usage Monitor v{}", env!("CARGO_PKG_VERSION")))
+        .with_title(format!("AI Usage Monitor v{}", aum::update::CURRENT))
         .with_inner_size([WIDTH, INITIAL_HEIGHT])
         .with_resizable(true);
     match eframe::icon_data::from_png_bytes(ICON_PNG) {
@@ -52,12 +52,19 @@ fn main() -> eframe::Result {
                     ctx.request_repaint()
                 });
             }
+            let ctx = cc.egui_ctx.clone();
+            let updater = aum::update::Updater::spawn(
+                aum::update::LATEST_RELEASE_URL.into(),
+                cfg.updates.check,
+                move || ctx.request_repaint(),
+            );
             Ok(Box::new(MonitorApp::new(
                 cc,
                 state,
                 cfg.always_on_top,
                 paths.config_dir.clone(),
                 cfg.context.clone(),
+                updater,
             )))
         }),
     )

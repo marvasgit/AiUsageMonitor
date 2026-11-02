@@ -23,6 +23,7 @@ pub struct Config {
     pub omo: OmoConfig,
     pub notifications: NotificationsConfig,
     pub context: ContextConfig,
+    pub updates: UpdatesConfig,
 }
 
 impl Default for Config {
@@ -47,6 +48,7 @@ impl Default for Config {
             omo: OmoConfig::default(),
             notifications: NotificationsConfig::default(),
             context: ContextConfig::default(),
+            updates: UpdatesConfig::default(),
         }
     }
 }
@@ -250,6 +252,20 @@ impl Default for ContextConfig {
     }
 }
 
+/// Looking for a newer release on GitHub at start and every few hours (`check`); the
+/// context menu can still check by hand when it is off.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    pub check: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { check: true }
+    }
+}
+
 /// One extra CLI config folder (an account) listed in `config.toml`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct AccountConfig {
@@ -334,6 +350,8 @@ mod tests {
         assert_eq!(cfg.minimax.models, vec!["general"]);
         assert_eq!(cfg.claude.context_limit, None);
         assert!(!cfg.always_on_top);
+        assert!(cfg.updates.check);
+        assert!(!parse("[updates]\ncheck = false\n").unwrap().0.updates.check);
     }
 
     #[test]

@@ -58,3 +58,6 @@ thresholds = [80, 95]            # percent; alerts again after the window resets
 warn = 60                        # percent of the context window: bar turns amber
 crit = 85                        # bar turns red
 notify = [80, 95]                # desktop alert when first crossed ([] = none; also off with [notifications] enabled = false)
+
+[updates]
+check = true                     # look for a new release at start and every 6 hours; the right-click menu checks on demand

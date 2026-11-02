@@ -1,8 +1,9 @@
 use aum::config::ContextConfig;
 use aum::model::{ProviderError, ProviderSnapshot, ProviderState, Session, Window};
 use aum::providers::openrouter;
-use aum::ui::app::{draw_body, draw_with_menu};
+use aum::ui::app::{draw_body, draw_update_banner, draw_with_menu, UpdateAction};
 use aum::ui::card::TimeMode;
+use aum::update::{Asset, Release, Status, Version};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use std::time::{Duration, SystemTime};
@@ -149,4 +150,74 @@ fn renders_one_card_per_account() {
     harness.run();
     harness.get_by_label("CLAUDE");
     harness.get_by_label("CLAUDE · PERSONAL");
+}
+
+fn release(binary: bool) -> Release {
+    let asset = |name: &str| Asset {
+        name: name.into(),
+        url: format!("https://example.invalid/{name}"),
+    };
+    Release {
+        version: Version::parse("v9.1.0").unwrap(),
+        page: "https://example.invalid/page".into(),
+        binary: binary.then(|| (asset("ai-usage-monitor-linux-x86_64"), asset("SHA256SUMS"))),
+    }
+}
+
+/// Clicks the banner drawn under the cards, as the app lays it out.
+fn click_banner(status: Status, label: &str) -> Option<UpdateAction> {
+    let states = states();
+    let clicked = std::cell::RefCell::new(None);
+    let mut harness = Harness::new_ui(|ui| {
+        draw_with_menu(
+            ui,
+            &states,
+            SystemTime::now(),
+            TimeMode::Countdown,
+            &ContextConfig::default(),
+            |_| {},
+        );
+        if let Some(action) = draw_update_banner(ui, &status) {
+            *clicked.borrow_mut() = Some(action);
+        }
+    });
+    harness.run();
+    harness.get_by_label_contains(label).click();
+    harness.run();
+    drop(harness);
+    clicked.into_inner()
+}
+
+#[test]
+fn update_banner_click_installs_or_restarts() {
+    assert_eq!(
+        click_banner(Status::Available(release(true)), "Update to v9.1.0"),
+        Some(UpdateAction::Install)
+    );
+    assert_eq!(
+        click_banner(Status::Available(release(false)), "download page"),
+        Some(UpdateAction::OpenPage(
+            "https://example.invalid/page".into()
+        ))
+    );
+    assert_eq!(
+        click_banner(Status::Installed(release(true)), "click to restart"),
+        Some(UpdateAction::Restart)
+    );
+}
+
+#[test]
+fn update_banner_hidden_without_news() {
+    for status in [
+        Status::Idle,
+        Status::Checking,
+        Status::UpToDate,
+        Status::Failed("x".into()),
+    ] {
+        let mut harness = Harness::new_ui(|ui| {
+            assert_eq!(draw_update_banner(ui, &status), None);
+        });
+        harness.run();
+        assert!(harness.query_by_label_contains("v9.1.0").is_none());
+    }
 }

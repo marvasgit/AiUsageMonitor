@@ -14,3 +14,4 @@ pub mod poller;
 pub mod providers;
 pub mod registry;
 pub mod ui;
+pub mod update;

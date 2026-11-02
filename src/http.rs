@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime};
 
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 pub const BODY_LIMIT: u64 = 2 * 1024 * 1024;
+/// Release downloads are megabytes, not kilobytes, so they get longer.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 pub struct HttpResponse {
@@ -24,11 +26,11 @@ impl HttpResponse {
     }
 }
 
-fn agent() -> ureq::Agent {
+fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
+        .timeout_global(Some(timeout))
         .http_status_as_error(false)
-        .user_agent(concat!("ai-usage-monitor/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("ai-usage-monitor/", env!("AUM_VERSION")))
         .build()
         .into()
 }
@@ -36,7 +38,7 @@ fn agent() -> ureq::Agent {
 /// GET `url`. Non-2xx statuses are returned; only transport failures are errors.
 /// Error text comes from ureq and never contains header values.
 pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, ProviderError> {
-    let mut req = agent().get(url);
+    let mut req = agent(TIMEOUT).get(url);
     for (name, value) in headers {
         req = req.header(*name, *value);
     }
@@ -60,6 +62,21 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, Provider
         body,
         retry_after,
     })
+}
+
+/// GET `url` as bytes, following redirects, reading at most `limit` bytes.
+/// Unlike [`get`], a non-2xx status is an error.
+pub fn download(url: &str, limit: u64) -> Result<Vec<u8>, ProviderError> {
+    let mut resp = agent(DOWNLOAD_TIMEOUT)
+        .get(url)
+        .call()
+        .map_err(|e| ProviderError::Network(e.to_string()))?;
+    check_status(resp.status().as_u16())?;
+    resp.body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(|e| ProviderError::Network(e.to_string()))
 }
 
 /// `Retry-After` is either delay seconds or an HTTP date; a date in the past means now.

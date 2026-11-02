@@ -1,6 +1,6 @@
 # AI Usage Monitor
 
-**Version 2.1.0**
+**Latest version:** see the [releases page](https://github.com/marvasgit/AiUsageMonitor/releases/latest)
 
 A small native desktop app for **Windows, Linux and macOS** that shows how much of your AI subscription you have used, at a glance. It supports **Claude** (Claude Code), **OpenAI** (ChatGPT plan used through the Codex CLI), **GitHub Copilot**, **Cursor** and **MiniMax** (Coding Plan), and is built so more providers can be added with one source file each.
 
@@ -67,7 +67,7 @@ Unlike version 1.0, the monitor no longer installs or modifies a Claude Code `st
 ./install.sh --uninstall  # remove it again (configuration and cache are kept)
 ```
 
-Run it again to update. It also works from a source checkout after `cargo build --release`. Start the monitor from the menu rather than from a terminal: a terminal may carry variables such as `CLAUDE_CONFIG_DIR` meant for one CLI session.
+Run it again to update, or let the app update itself (see *Updates* below). It also works from a source checkout after `cargo build --release`. Start the monitor from the menu rather than from a terminal: a terminal may carry variables such as `CLAUDE_CONFIG_DIR` meant for one CLI session.
 
 **macOS:** there is no prebuilt release. Build from source (see *Building from source*), then:
 
@@ -176,7 +176,13 @@ Run the tests with `cargo test`.
 
 ## Releases
 
-Versions follow [semantic versioning](https://semver.org): bug fixes raise the patch number (2.0.3 → 2.0.4), new features the minor number (2.0.3 → 2.1.0), and changes that break existing configuration the major number. To release, set the version in `Cargo.toml` and at the top of this README and merge it into `main`: when no `vX.Y.Z` tag exists for that version yet, CI builds the Linux and Windows packages, tags the merged commit and publishes the packages with a `SHA256SUMS` file on the releases page. Merges that leave the version unchanged only build. Pushing a tag `vX.Y.Z` by hand still releases too.
+Versions follow [semantic versioning](https://semver.org): bug fixes raise the patch number (2.0.3 → 2.0.4), new features the minor number (2.0.3 → 2.1.0), and changes that break existing configuration the major number.
+
+Every merge into `main` is released automatically. CI reads the [conventional commit](https://www.conventionalcommits.org) messages since the last `vX.Y.Z` tag: a breaking change (`feat!:` or a `BREAKING CHANGE` line) raises the major number, any `feat:` the minor number, anything else the patch number. It builds the Linux and Windows packages with that version, tags the merged commit and publishes the packages, the bare executables and a `SHA256SUMS` file on the releases page. To force a version, for example a planned major release, set a higher one in `Cargo.toml`. Pushing a tag `vX.Y.Z` by hand still releases too. Local builds report the version in `Cargo.toml`.
+
+### Updates
+
+The app looks for a newer release at start and every 6 hours (turn this off with `check = false` under `[updates]`; the right-click menu has *Check for updates* either way). When one is found, a line under the cards offers it: on Windows and Linux a click downloads the new executable, checks it against the release's `SHA256SUMS`, replaces the running one and then offers a restart. On macOS, where no build is published, the click opens the releases page.
 
 ## Adding a provider
 

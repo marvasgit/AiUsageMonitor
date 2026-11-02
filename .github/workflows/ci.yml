@@ -7,13 +7,65 @@ on:
   pull_request:
 
 jobs:
+  # On a push to main, picks the next version from the conventional commits since the
+  # last v* tag: a breaking change (`type!:` or `BREAKING CHANGE`) raises the major
+  # number, `feat` the minor number, anything else the patch number. A higher version
+  # set by hand in Cargo.toml wins, so a planned major release is still possible.
+  version:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: next
+        run: |
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$last" ]; then
+            base=0.0.0
+            log=$(git log --format=%B)
+          else
+            base=${last#v}
+            log=$(git log --format=%B "$last..HEAD")
+          fi
+          if [ -n "$last" ] && [ -z "$(git rev-list "$last..HEAD")" ]; then
+            echo "HEAD is already released as $last"
+            exit 0
+          fi
+          IFS=. read -r major minor patch <<< "$base"
+          if printf '%s\n' "$log" | grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE'; then
+            next="$((major + 1)).0.0"
+          elif printf '%s\n' "$log" | grep -qE '^feat(\([^)]*\))?:'; then
+            next="$major.$((minor + 1)).0"
+          else
+            next="$major.$minor.$((patch + 1))"
+          fi
+          manual=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$(printf '%s\n%s\n' "$next" "$manual" | sort -V | tail -n 1)" = "$manual" ] && [ "$manual" != "$next" ]; then
+            next=$manual
+          fi
+          if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+            echo "v$next already exists" >&2
+            exit 1
+          fi
+          echo "releasing v$next (previous: ${last:-none})"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+
   build:
+    # version is skipped outside main pushes; build anyway unless it failed.
+    if: ${{ !cancelled() && needs.version.result != 'failure' }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
         # macOS runs the keychain code, which is compiled only there; it is not packaged.
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Read by build.rs: the version the app reports and compares against releases.
+      AUM_VERSION: ${{ needs.version.outputs.version || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,48 +79,34 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
+      # The bare executables let the app update itself without unpacking an archive.
       - name: Package Linux
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/ai-usage-monitor
           cp target/release/ai-usage-monitor install.sh assets/ai-usage-monitor.desktop assets/icon.png config.example.toml README.md LICENSE dist/ai-usage-monitor/
           tar -C dist -czf ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor
+          cp target/release/ai-usage-monitor ai-usage-monitor-linux-x86_64
       - name: Package Windows
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path target/release/ai-usage-monitor.exe,config.example.toml,README.md,LICENSE -DestinationPath ai-usage-monitor-windows-x86_64.zip
+        run: |
+          Compress-Archive -Path target/release/ai-usage-monitor.exe,config.example.toml,README.md,LICENSE -DestinationPath ai-usage-monitor-windows-x86_64.zip
+          Copy-Item target/release/ai-usage-monitor.exe ai-usage-monitor-windows-x86_64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: ai-usage-monitor-${{ runner.os }}
           path: |
             ai-usage-monitor-linux-x86_64.tar.gz
+            ai-usage-monitor-linux-x86_64
             ai-usage-monitor-windows-x86_64.zip
+            ai-usage-monitor-windows-x86_64.exe
           if-no-files-found: ignore
-
-  # On a push to main, releases the Cargo.toml version when no tag for it exists yet,
-  # so merging a version bump publishes it; other merges only build.
-  version:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.check.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: check
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
-          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already tagged; nothing to release"
-          else
-            echo "releasing v$version"
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          fi
 
   release:
     # version is skipped on tag pushes, so check results explicitly instead of the default success().
     if: >-
       !cancelled() && needs.build.result == 'success' &&
-      (startsWith(github.ref, 'refs/tags/v') || needs.version.outputs.tag != '')
+      (startsWith(github.ref, 'refs/tags/v') || needs.version.outputs.version != '')
     needs: [build, version]
     runs-on: ubuntu-latest
     concurrency: release
@@ -80,15 +118,17 @@ jobs:
         with:
           merge-multiple: true
       - name: Checksums
-        run: sha256sum ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor-windows-x86_64.zip > SHA256SUMS
+        run: sha256sum ai-usage-monitor-linux-x86_64.tar.gz ai-usage-monitor-linux-x86_64 ai-usage-monitor-windows-x86_64.zip ai-usage-monitor-windows-x86_64.exe > SHA256SUMS
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           # Creates the tag at the merged commit when releasing from main.
-          tag_name: ${{ needs.version.outputs.tag || github.ref_name }}
+          tag_name: ${{ needs.version.outputs.version && format('v{0}', needs.version.outputs.version) || github.ref_name }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
             ai-usage-monitor-linux-x86_64.tar.gz
+            ai-usage-monitor-linux-x86_64
             ai-usage-monitor-windows-x86_64.zip
+            ai-usage-monitor-windows-x86_64.exe
             SHA256SUMS
