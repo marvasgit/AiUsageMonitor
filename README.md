@@ -163,7 +163,7 @@ Run the tests with `cargo test`.
 
 ## Releases
 
-Versions follow [semantic versioning](https://semver.org): bug fixes raise the patch number (2.0.3 → 2.0.4), new features the minor number (2.0.3 → 2.1.0), and changes that break existing configuration the major number. To release, set the version in `Cargo.toml` and at the top of this README, commit, and push a tag `vX.Y.Z`: CI then builds the Linux and Windows packages and publishes them with a `SHA256SUMS` file on the releases page.
+Versions follow [semantic versioning](https://semver.org): bug fixes raise the patch number (2.0.3 → 2.0.4), new features the minor number (2.0.3 → 2.1.0), and changes that break existing configuration the major number. To release, set the version in `Cargo.toml` and at the top of this README and merge it into `main`: when no `vX.Y.Z` tag exists for that version yet, CI builds the Linux and Windows packages, tags the merged commit and publishes the packages with a `SHA256SUMS` file on the releases page. Merges that leave the version unchanged only build. Pushing a tag `vX.Y.Z` by hand still releases too.
 
 ## Adding a provider
 
